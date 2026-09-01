@@ -40,18 +40,64 @@ export class Client {
           this.buffer = parsed.buffer;
           for (const msg of parsed.messages) {
             if (msg.type === 'auth.ok') {
+
               this.salt = msg.salt;
-              console.log(`Connected to Hub ${msg.hubId} at ${this.host}:${this.port}`);
+
+              console.log(
+                `Connected to Hub ${msg.hubId} ` +
+                `at ${this.host}:${this.port}`
+              );
+
+
+              /*
+               * New Trusted Device information
+               *
+               * trusted === true means the Hub has accepted
+               * this device as a trusted member of the group.
+               */
+
+              if (msg.trusted) {
+
+                if (msg.reconnect) {
+
+                  console.log(
+                    '[TRUSTED] Existing trusted device. Reconnected.'
+                  );
+
+                } else {
+
+                  console.log(
+                    '[TRUSTED] Device paired and added to trusted devices.'
+                  );
+                }
+              }
               resolve();
             } else if (msg.type === 'error') {
-              reject(new Error(msg.code));
+
+              /*
+               * Special message for revoked devices.
+               * This gives the user a meaningful error instead
+               * of simply showing a generic connection failure.
+               */
+
+              if (msg.code === 'DEVICE_REVOKED') {
+
+                reject(
+                  new Error(
+                    'This device has been revoked by the Hub.'
+                  )
+                );
+
+              } else {
+
+                reject(
+                  new Error(msg.code)
+                );
+              }
+
               socket.destroy();
-            } else if (msg.type === 'secure') {
-              try {
-                const payload = decryptObject(msg.envelope, this.pin, this.salt);
-                this.handleApplication(payload);
-              } catch { console.error('[ERROR] Could not decrypt incoming message'); }
             }
+
           }
         } catch (e) { reject(e); }
       });
@@ -88,7 +134,7 @@ export async function discover(timeoutMs = 1800) {
     const finish = () => {
       if (finished) return;
       finished = true;
-      try { socket.close(); } catch {}
+      try { socket.close(); } catch { }
       resolve([...found.values()]);
     };
 
@@ -103,7 +149,7 @@ export async function discover(timeoutMs = 1800) {
         if (msg.type === 'uc.hub' && msg.protocol === PROTOCOL) {
           found.set(msg.hubId, { ...msg, address: rinfo.address });
         }
-      } catch {}
+      } catch { }
     });
 
     socket.bind(() => {

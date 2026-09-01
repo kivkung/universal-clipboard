@@ -62,19 +62,150 @@ async function main() {
   }
 
   if (cmd === 'devices') {
+
     const s = loadState();
-    if (s.role !== 'hub') return console.log('This device is not configured as the Hub.');
-    console.log(JSON.stringify(Object.values(s.peers ?? {}), null, 2));
+
+    if (s.role !== 'hub') {
+      return console.log(
+        'This device is not configured as the Hub.'
+      );
+    }
+
+
+    const peers =
+      Object.values(s.peers ?? {});
+
+
+    if (!peers.length) {
+
+      console.log(
+        'No trusted devices.'
+      );
+
+      return;
+    }
+
+
+    console.log(
+      '\nTrusted Devices\n'
+    );
+
+
+    for (const peer of peers) {
+
+      console.log(
+        `ID:        ${peer.id}`
+      );
+
+      console.log(
+        `Name:      ${peer.name}`
+      );
+
+      console.log(
+        `Status:    ${peer.trusted ? 'TRUSTED' : 'KNOWN'}`
+      );
+
+      console.log(
+        `Address:   ${peer.address}`
+      );
+
+      console.log(
+        `First Seen:${new Date(peer.firstSeen).toISOString()}`
+      );
+
+      console.log(
+        `Last Seen: ${new Date(peer.lastSeen).toISOString()}`
+      );
+
+      console.log(
+        ''
+      );
+    }
+
     return;
   }
 
   if (cmd === 'revoke') {
+
     const id = args[0];
-    if (!id) return usage();
+
+    if (!id) {
+      return usage();
+    }
+
+
     const s = loadState();
-    if (s.role !== 'hub') return console.log('This device is not configured as the Hub.');
-    delete s.peers[id]; saveState(s);
-    console.log(`Revoked ${id}.`);
+
+    if (s.role !== 'hub') {
+      return console.log(
+        'This device is not configured as the Hub.'
+      );
+    }
+
+
+    /*
+     * Check whether the device actually exists.
+     */
+
+    if (!s.peers?.[id]) {
+
+      /*
+       * It may already be revoked.
+       */
+
+      if (
+        s.revokedDevices?.includes(id)
+      ) {
+
+        console.log(
+          `Device ${id} is already revoked.`
+        );
+
+      } else {
+
+        console.log(
+          `Device ${id} not found.`
+        );
+      }
+
+      return;
+    }
+
+
+    /*
+     * Add device to persistent revoked list.
+     */
+
+    s.revokedDevices =
+      s.revokedDevices ?? [];
+
+
+    if (
+      !s.revokedDevices.includes(id)
+    ) {
+
+      s.revokedDevices.push(id);
+    }
+
+
+    /*
+     * Remove it from the trusted peer list.
+     */
+
+    delete s.peers[id];
+
+
+    /*
+     * Persist the change.
+     */
+
+    saveState(s);
+
+
+    console.log(
+      `Revoked ${id}.`
+    );
+
     return;
   }
 
@@ -111,7 +242,7 @@ async function main() {
 
 async function watchLoop(node) {
   let last = '';
-  try { last = getClipboard(); } catch {}
+  try { last = getClipboard(); } catch { }
   console.log('Clipboard watcher running. Press Ctrl+C to stop.');
   setInterval(() => {
     try {
@@ -123,7 +254,7 @@ async function watchLoop(node) {
         else node.push(current);
         console.log(`[LOCAL COPY] ${current.length} bytes`);
       }
-    } catch (e) {}
+    } catch (e) { }
   }, 500);
 }
 
