@@ -1,0 +1,19 @@
+{
+  "name": "universal-clipboard-lan",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "description": "Terminal-first local universal clipboard over a LAN",
+  "main": "src/cli.js",
+  "scripts": {
+    "uc": "node src/cli.js",
+    "host": "node src/cli.js host",
+    "discover": "node src/cli.js discover",
+    "join": "node src/cli.js join",
+    "status": "node src/cli.js status",
+    "push": "node src/cli.js push"
+  },
+  "dependencies": {
+    "clipboardy": "^4.0.0"
+  }
+}
