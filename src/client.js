@@ -1,6 +1,7 @@
 import net from 'node:net';
 import dgram from 'node:dgram';
 import os from 'node:os';
+
 import { TCP_PORT, DISCOVERY_PORT, PROTOCOL } from './config.js';
 import { encryptObject, decryptObject } from './crypto.js';
 import { line, parseLines, clipboardMessage } from './protocol.js';
@@ -14,11 +15,17 @@ export class Client {
     this.host = host;
     this.port = Number(port);
     this.pin = pin;
+
     this.state = loadState();
     this.state.role = 'client';
-    this.state.hub = { host: this.host, port: this.port };
+    this.state.hub = {
+      host: this.host,
+      port: this.port
+    };
     this.state.pin = this.pin;
+
     saveState(this.state);
+
     this.socket = null;
     this.salt = null;
     this.buffer = '';
@@ -27,20 +34,62 @@ export class Client {
 
   connect() {
     return new Promise((resolve, reject) => {
-      const socket = net.createConnection({ host: this.host, port: this.port });
+      const socket = net.createConnection({
+        host: this.host,
+        port: this.port
+      });
+
       this.socket = socket;
       socket.setEncoding('utf8');
+
+      /*
+       * TCP connection established.
+       * Send authentication information to the Hub.
+       */
       socket.on('connect', () => {
-        socket.write(line({ type: 'auth', protocol: PROTOCOL, deviceId: this.id, name: os.hostname(), pin: this.pin }));
+        console.log(
+          `[CONNECT] Connected to ${this.host}:${this.port}`
+        );
+
+        socket.write(
+          line({
+            type: 'auth',
+            protocol: PROTOCOL,
+            deviceId: this.id,
+            name: os.hostname(),
+            pin: this.pin
+          })
+        );
       });
+
+      /*
+       * Receive TCP data from Hub.
+       *
+       * IMPORTANT:
+       * The Hub sends clipboard data as:
+       *
+       * {
+       *   type: "secure",
+       *   envelope: "..."
+       * }
+       *
+       * Therefore secure messages must be decrypted here
+       * before being passed to handleApplication().
+       */
       socket.on('data', chunk => {
         this.buffer += chunk;
+
         try {
           const parsed = parseLines(this.buffer);
           this.buffer = parsed.buffer;
-          for (const msg of parsed.messages) {
-            if (msg.type === 'auth.ok') {
 
+          for (const msg of parsed.messages) {
+            console.log(`[RECV] ${msg.type}`);
+
+            /*
+             * Authentication successful.
+             */
+            if (msg.type === 'auth.ok') {
               this.salt = msg.salt;
 
               console.log(
@@ -48,48 +97,62 @@ export class Client {
                 `at ${this.host}:${this.port}`
               );
 
-
               /*
-               * New Trusted Device information
-               *
-               * trusted === true means the Hub has accepted
-               * this device as a trusted member of the group.
+               * Trusted Device information.
                */
-
               if (msg.trusted) {
-
                 if (msg.reconnect) {
-
                   console.log(
                     '[TRUSTED] Existing trusted device. Reconnected.'
                   );
-
                 } else {
-
                   console.log(
                     '[TRUSTED] Device paired and added to trusted devices.'
                   );
                 }
               }
+
               resolve();
-            } else if (msg.type === 'error') {
+            }
 
-              /*
-               * Special message for revoked devices.
-               * This gives the user a meaningful error instead
-               * of simply showing a generic connection failure.
-               */
+            /*
+             * Encrypted application message.
+             *
+             * This was the missing part.
+             */
+            else if (msg.type === 'secure') {
+              console.log('[RECV] secure message');
 
+              try {
+                const payload = decryptObject(
+                  msg.envelope,
+                  this.pin,
+                  this.salt
+                );
+
+                console.log(
+                  `[DECRYPT] ${payload.type || 'unknown'}`
+                );
+
+                this.handleApplication(payload);
+              } catch (e) {
+                console.error(
+                  `[DECRYPT ERROR] ${e.message}`
+                );
+              }
+            }
+
+            /*
+             * Error from Hub.
+             */
+            else if (msg.type === 'error') {
               if (msg.code === 'DEVICE_REVOKED') {
-
                 reject(
                   new Error(
                     'This device has been revoked by the Hub.'
                   )
                 );
-
               } else {
-
                 reject(
                   new Error(msg.code)
                 );
@@ -97,83 +160,213 @@ export class Client {
 
               socket.destroy();
             }
-
           }
-        } catch (e) { reject(e); }
+        } catch (e) {
+          console.error(
+            `[PROTOCOL ERROR] ${e.message}`
+          );
+
+          reject(e);
+        }
       });
-      socket.on('error', err => reject(err));
-      socket.on('close', () => console.log('[CONNECTION] closed'));
+
+      socket.on('error', err => {
+        console.error(
+          `[CONNECTION ERROR] ${err.message}`
+        );
+
+        reject(err);
+      });
+
+      socket.on('close', () => {
+        console.log('[CONNECTION] closed');
+      });
     });
   }
 
+  /*
+   * Handle decrypted application messages.
+   */
   handleApplication(payload) {
-    if (payload.type !== 'clipboard.push') return;
-    if (payload.senderId === this.id || payload.hash === this.lastHash) return;
+    if (payload.type !== 'clipboard.push') {
+      console.log(
+        `[APPLICATION] Ignored message type: ${payload.type}`
+      );
+      return;
+    }
+
+    /*
+     * Ignore messages generated by this same device.
+     */
+    if (payload.senderId === this.id) {
+      console.log('[SYNC] Ignored own message');
+      return;
+    }
+
+    /*
+     * Ignore duplicate clipboard content.
+     */
+    if (payload.hash === this.lastHash) {
+      console.log('[SYNC] Ignored duplicate clipboard');
+      return;
+    }
+
     this.lastHash = payload.hash;
+
+    /*
+     * Currently support text clipboard.
+     */
     if (payload.contentType === 'text') {
-      setClipboard(payload.content);
-      console.log(`[SYNC] received ${payload.content.length} bytes from ${payload.senderId}`);
+      try {
+        setClipboard(payload.content);
+
+        console.log(
+          `[SYNC] received ${payload.content.length} bytes ` +
+          `from ${payload.senderId}`
+        );
+      } catch (e) {
+        console.error(
+          `[CLIPBOARD ERROR] ${e.message}`
+        );
+      }
+    } else {
+      console.log(
+        `[SYNC] Unsupported content type: ${payload.contentType}`
+      );
     }
   }
 
+  /*
+   * Send local clipboard content to Hub.
+   */
   push(text) {
-    const payload = clipboardMessage({ senderId: this.id, text });
-    if (payload.hash === this.lastHash) return;
+    const payload = clipboardMessage({
+      senderId: this.id,
+      text
+    });
+
+    /*
+     * Prevent sending the same clipboard content repeatedly.
+     */
+    if (payload.hash === this.lastHash) {
+      return;
+    }
+
     this.lastHash = payload.hash;
-    this.socket.write(line({ type: 'secure', envelope: encryptObject(payload, this.pin, this.salt) }));
-    console.log(`[SEND] ${text.length} bytes`);
+
+    this.socket.write(
+      line({
+        type: 'secure',
+        envelope: encryptObject(
+          payload,
+          this.pin,
+          this.salt
+        )
+      })
+    );
+
+    console.log(
+      `[SEND] ${text.length} bytes`
+    );
   }
 }
 
+/*
+ * UDP Hub Discovery
+ */
 export async function discover(timeoutMs = 1800) {
   return new Promise(resolve => {
     const socket = dgram.createSocket('udp4');
     const found = new Map();
+
     let finished = false;
 
     const finish = () => {
       if (finished) return;
+
       finished = true;
-      try { socket.close(); } catch { }
+
+      try {
+        socket.close();
+      } catch {}
+
       resolve([...found.values()]);
     };
 
     socket.on('error', err => {
-      console.error(`[DISCOVERY] UDP error: ${err.message}`);
+      console.error(
+        `[DISCOVERY] UDP error: ${err.message}`
+      );
+
       finish();
     });
 
     socket.on('message', (buf, rinfo) => {
       try {
         const msg = JSON.parse(buf.toString());
-        if (msg.type === 'uc.hub' && msg.protocol === PROTOCOL) {
-          found.set(msg.hubId, { ...msg, address: rinfo.address });
+
+        if (
+          msg.type === 'uc.hub' &&
+          msg.protocol === PROTOCOL
+        ) {
+          found.set(
+            msg.hubId,
+            {
+              ...msg,
+              address: rinfo.address
+            }
+          );
         }
-      } catch { }
+      } catch {}
     });
 
     socket.bind(() => {
       socket.setBroadcast(true);
-      const packet = Buffer.from(JSON.stringify({
-        type: 'uc.discover',
-        protocol: PROTOCOL
-      }));
 
-      // Broadcast once per active IPv4 interface. This is more reliable than
-      // relying only on 255.255.255.255, especially on Windows Hotspot/ICS
-      // networks such as 192.168.137.0/24.
-      const broadcasts = new Set(['255.255.255.255']);
+      const packet = Buffer.from(
+        JSON.stringify({
+          type: 'uc.discover',
+          protocol: PROTOCOL
+        })
+      );
+
+      /*
+       * Broadcast once per active IPv4 interface.
+       * This is important for Windows Hotspot / ICS networks.
+       */
+      const broadcasts = new Set([
+        '255.255.255.255'
+      ]);
+
       for (const nic of localIPv4s()) {
-        if (nic.broadcast) broadcasts.add(nic.broadcast);
+        if (nic.broadcast) {
+          broadcasts.add(nic.broadcast);
+        }
       }
 
-      console.log(`[DISCOVERY] Searching for hubs for ${timeoutMs}ms...`);
-      console.log(`[DISCOVERY] Broadcast targets: ${[...broadcasts].join(', ')}`);
+      console.log(
+        `[DISCOVERY] Searching for hubs for ${timeoutMs}ms...`
+      );
+
+      console.log(
+        `[DISCOVERY] Broadcast targets: ` +
+        `${[...broadcasts].join(', ')}`
+      );
 
       for (const address of broadcasts) {
-        socket.send(packet, DISCOVERY_PORT, address, err => {
-          if (err) console.error(`[DISCOVERY] Could not send to ${address}: ${err.message}`);
-        });
+        socket.send(
+          packet,
+          DISCOVERY_PORT,
+          address,
+          err => {
+            if (err) {
+              console.error(
+                `[DISCOVERY] Could not send to ${address}: ` +
+                `${err.message}`
+              );
+            }
+          }
+        );
       }
     });
 
