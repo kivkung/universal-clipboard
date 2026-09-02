@@ -250,8 +250,12 @@ async function watchLoop(node) {
       if (current !== last) {
         last = current;
         const payload = clipboardMessage({ senderId: node.id, text: current });
-        if (node instanceof Hub) node.pushFromHub(payload);
-        else node.push(current);
+        if (node instanceof Hub) {
+          node.pushFromHub(payload);
+        } else {
+          node.push(current);
+        }
+
         console.log(`[LOCAL COPY] ${current.length} bytes`);
       }
     } catch (e) { }

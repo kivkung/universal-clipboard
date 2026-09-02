@@ -306,11 +306,43 @@ export class Hub {
   }
 
   pushFromHub(payload) {
-    if (!payload.hash || payload.hash === this.lastHash) return;
+    if (!payload.hash) {
+      console.log('[HUB SEND] No hash');
+      return;
+    }
+
+    if (payload.hash === this.lastHash) {
+      console.log('[HUB SEND] DUPLICATE HASH - NOT SENT');
+      return;
+    }
+
     this.lastHash = payload.hash;
-    try { setClipboard(payload.content); } catch { }
-    for (const socket of this.sockets.values()) {
-      socket.write(line({ type: 'secure', envelope: encryptObject(payload, this.state.pin, this.state.salt) }));
+
+    try {
+      setClipboard(payload.content);
+    } catch { }
+
+    console.log(
+      `[HUB SEND] ${payload.contentType} ${payload.content?.length ?? 0} bytes`
+    );
+
+    console.log(
+      `[HUB SEND] Connected peers: ${this.sockets.size}`
+    );
+
+    for (const [id, socket] of this.sockets) {
+      console.log(`[HUB SEND] → ${id}`);
+
+      socket.write(
+        line({
+          type: 'secure',
+          envelope: encryptObject(
+            payload,
+            this.state.pin,
+            this.state.salt
+          )
+        })
+      );
     }
   }
 
