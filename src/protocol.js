@@ -31,3 +31,27 @@ export function clipboardMessage({ senderId, text }) {
     timestamp: Date.now()
   };
 }
+
+export function fileMessage({
+  senderId,
+  name,
+  mime,
+  size,
+  hash
+}) {
+  return {
+    type: 'clipboard.push',
+    id: crypto.randomUUID(),
+    senderId,
+    contentType: 'file',
+
+    file: {
+      name,
+      mime,
+      size,
+      hash
+    },
+
+    timestamp: Date.now()
+  };
+}

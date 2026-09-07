@@ -89,23 +89,14 @@ export class Hub {
         const parsed = parseLines(buffer);
         buffer = parsed.buffer;
         for (const msg of parsed.messages) {
+
           if (msg.type === 'auth') {
 
-            /*
-             * ----------------------------------------------------
-             * 1. Basic authentication
-             * ----------------------------------------------------
-             *
-             * PIN remains our PSK.
-             *
-             * Trusted Device does NOT replace authentication.
-             *
-             * The client still has to prove that it knows the
-             * group PIN.
-             */
+            // ==================================================
+            // Authentication
+            // ==================================================
 
             if (msg.pin !== this.state.pin) {
-
               socket.write(
                 line({
                   type: 'error',
@@ -114,19 +105,10 @@ export class Hub {
               );
 
               socket.destroy();
-
               return;
             }
 
-
-            /*
-             * ----------------------------------------------------
-             * 2. Validate Device ID
-             * ----------------------------------------------------
-             */
-
             if (!msg.deviceId) {
-
               socket.write(
                 line({
                   type: 'error',
@@ -135,25 +117,14 @@ export class Hub {
               );
 
               socket.destroy();
-
               return;
             }
 
+            // ==================================================
+            // Check revoked device
+            // ==================================================
 
-            /*
-             * ----------------------------------------------------
-             * 3. Check revoked devices
-             * ----------------------------------------------------
-             *
-             * This check MUST happen before accepting the device.
-             *
-             * Merely deleting the peer from state is not enough,
-             * because the device may still know the correct PIN.
-             */
-
-            if (
-              this.state.revokedDevices.includes(msg.deviceId)
-            ) {
+            if (this.state.revokedDevices.includes(msg.deviceId)) {
 
               console.log(
                 `[REJECTED] Revoked device ${msg.deviceId}`
@@ -167,40 +138,18 @@ export class Hub {
               );
 
               socket.destroy();
-
               return;
             }
 
-
-            /*
-             * ----------------------------------------------------
-             * 4. Determine whether this is a new or trusted device
-             * ----------------------------------------------------
-             */
+            // ==================================================
+            // Trusted Device
+            // ==================================================
 
             const existing =
               this.state.peers[msg.deviceId];
 
             const isTrusted =
               Boolean(existing?.trusted);
-
-
-            /*
-             * ----------------------------------------------------
-             * 5. Create/update peer
-             * ----------------------------------------------------
-             *
-             * Existing device:
-             *     trusted = true
-             *     update lastSeen
-             *
-             * New device:
-             *     create peer
-             *     trusted = true
-             *
-             * Therefore successful PIN pairing automatically
-             * establishes trust.
-             */
 
             peer = {
               id: msg.deviceId,
@@ -213,12 +162,10 @@ export class Hub {
               socket
             );
 
-
             const now = Date.now();
 
             this.state.peers[peer.id] = {
               id: peer.id,
-
               name:
                 msg.name ??
                 existing?.name ??
@@ -229,42 +176,30 @@ export class Hub {
 
               trusted: true,
 
-              // Preserve the original pairing time
               firstSeen:
                 existing?.firstSeen ??
                 now,
 
-              // Update every successful connection
-              lastSeen: now
+              lastSeen:
+                now
             };
-
 
             saveState(this.state);
 
-
-            /*
-             * ----------------------------------------------------
-             * 6. Tell client whether this was a new pairing
-             *    or a trusted-device reconnect.
-             * ----------------------------------------------------
-             */
+            // ==================================================
+            // Authentication success
+            // ==================================================
 
             socket.write(
               line({
                 type: 'auth.ok',
-
                 protocol: PROTOCOL,
-
                 hubId: this.id,
-
                 salt: this.state.salt,
-
                 trusted: true,
-
                 reconnect: isTrusted
               })
             );
-
 
             if (isTrusted) {
 
@@ -279,8 +214,69 @@ export class Hub {
                 `\n[PAIR] New trusted device ${peer.id} ` +
                 `from ${socket.remoteAddress}`
               );
+
             }
+
           }
+
+          // ====================================================
+          // Receive encrypted application data from Client
+          // ====================================================
+
+          else if (msg.type === 'secure') {
+
+            if (!peer) {
+              console.log(
+                '[REJECTED] Secure message before authentication'
+              );
+
+              socket.write(
+                line({
+                  type: 'error',
+                  code: 'NOT_AUTHENTICATED'
+                })
+              );
+
+              return;
+            }
+
+            try {
+
+              console.log(
+                `[HUB RECV] secure message from ${peer.id}`
+              );
+
+              const payload = decryptObject(
+                msg.envelope,
+                this.state.pin,
+                this.state.salt
+              );
+
+              console.log(
+                `[HUB DECRYPT] ${payload.type || 'unknown'}`
+              );
+
+              this.handleApplication(
+                payload,
+                peer.id
+              );
+
+            } catch (e) {
+
+              console.error(
+                `[HUB DECRYPT ERROR] ${e.message}`
+              );
+
+              socket.write(
+                line({
+                  type: 'error',
+                  code: 'BAD_ENCRYPTED_MESSAGE'
+                })
+              );
+            }
+
+          }
+
         }
       } catch (e) {
         socket.write(line({ type: 'error', code: 'BAD_MESSAGE' }));
