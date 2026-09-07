@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 
 const FRAME_HEADER_SIZE = 5;
 
-const FRAME_JSON = 0x01;
-const FRAME_BINARY = 0x02;
+export const FRAME_JSON = 0x01;
+export const FRAME_BINARY = 0x02;
 
 export function encodeFrame(type, payload) {
   if (!Buffer.isBuffer(payload)) {
