@@ -43,3 +43,38 @@ export function decryptObject(envelope, pin, saltString) {
   ]);
   return JSON.parse(plaintext.toString('utf8'));
 }
+
+export function createFileEncryptor(pin, saltString) {
+  const key = deriveKey(pin, saltString);
+  const iv = crypto.randomBytes(12);
+
+  const cipher = crypto.createCipheriv(
+    'aes-256-gcm',
+    key,
+    iv
+  );
+
+  return {
+    iv,
+    cipher
+  };
+}
+
+export function createFileDecryptor(
+  pin,
+  saltString,
+  iv,
+  tag
+) {
+  const key = deriveKey(pin, saltString);
+
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    key,
+    iv
+  );
+
+  decipher.setAuthTag(tag);
+
+  return decipher;
+}

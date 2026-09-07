@@ -1,13 +1,18 @@
 import net from 'node:net';
 import dgram from 'node:dgram';
-import crypto from 'node:crypto';
 import os from 'node:os';
 import { TCP_PORT, DISCOVERY_PORT, PROTOCOL } from './config.js';
 import { encryptObject, decryptObject, randomPin, randomSalt } from './crypto.js';
-import { line, parseLines } from './protocol.js';
 import { deviceId, loadState, saveState } from './state.js';
 import { localIPv4s } from './net.js';
 import { getClipboard, setClipboard } from './clipboard.js';
+import {
+  encodeJsonFrame,
+  decodeJsonFrame,
+  parseFrames,
+  FRAME_JSON,
+  FRAME_BINARY
+} from './protocol.js';
 
 export class Hub {
   constructor() {
@@ -80,15 +85,28 @@ export class Hub {
   }
 
   handleSocket(socket) {
-    let buffer = '';
+    let buffer = Buffer.alloc(0);
     let peer = null;
-    socket.setEncoding('utf8');
     socket.on('data', chunk => {
-      buffer += chunk;
+      buffer = Buffer.concat([buffer, chunk]);
+
       try {
-        const parsed = parseLines(buffer);
+        const parsed = parseFrames(buffer);
         buffer = parsed.buffer;
-        for (const msg of parsed.messages) {
+
+        for (const frame of parsed.frames) {
+
+          if (frame.type !== FRAME_JSON) {
+            if (frame.type === FRAME_BINARY) {
+              console.log(
+                `[HUB RECV] binary frame: ${frame.payload.length} bytes`
+              );
+            }
+
+            continue;
+          }
+
+          const msg = decodeJsonFrame(frame.payload);
 
           if (msg.type === 'auth') {
 
@@ -98,7 +116,7 @@ export class Hub {
 
             if (msg.pin !== this.state.pin) {
               socket.write(
-                line({
+                encodeJsonFrame({
                   type: 'error',
                   code: 'BAD_PIN'
                 })
@@ -110,7 +128,7 @@ export class Hub {
 
             if (!msg.deviceId) {
               socket.write(
-                line({
+                encodeJsonFrame({
                   type: 'error',
                   code: 'DEVICE_ID_REQUIRED'
                 })
@@ -131,7 +149,7 @@ export class Hub {
               );
 
               socket.write(
-                line({
+                encodeJsonFrame({
                   type: 'error',
                   code: 'DEVICE_REVOKED'
                 })
@@ -191,7 +209,7 @@ export class Hub {
             // ==================================================
 
             socket.write(
-              line({
+              encodeJsonFrame({
                 type: 'auth.ok',
                 protocol: PROTOCOL,
                 hubId: this.id,
@@ -231,7 +249,7 @@ export class Hub {
               );
 
               socket.write(
-                line({
+                encodeJsonFrame({
                   type: 'error',
                   code: 'NOT_AUTHENTICATED'
                 })
@@ -268,7 +286,7 @@ export class Hub {
               );
 
               socket.write(
-                line({
+                encodeJsonFrame({
                   type: 'error',
                   code: 'BAD_ENCRYPTED_MESSAGE'
                 })
@@ -279,7 +297,7 @@ export class Hub {
 
         }
       } catch (e) {
-        socket.write(line({ type: 'error', code: 'BAD_MESSAGE' }));
+        socket.write(encodeJsonFrame({ type: 'error', code: 'BAD_MESSAGE' }));
       }
     });
     socket.on('close', () => {
@@ -297,7 +315,7 @@ export class Hub {
     for (const [id, socket] of this.sockets) {
       if (id === fromId) continue;
       const envelope = encryptObject(payload, this.state.pin, this.state.salt);
-      socket.write(line({ type: 'secure', envelope }));
+      socket.write(encodeJsonFrame({ type: 'secure', envelope }));
     }
   }
 
@@ -330,7 +348,7 @@ export class Hub {
       console.log(`[HUB SEND] → ${id}`);
 
       socket.write(
-        line({
+        encodeJsonFrame({
           type: 'secure',
           envelope: encryptObject(
             payload,

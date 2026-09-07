@@ -4,10 +4,18 @@ import os from 'node:os';
 
 import { TCP_PORT, DISCOVERY_PORT, PROTOCOL } from './config.js';
 import { encryptObject, decryptObject } from './crypto.js';
-import { line, parseLines, clipboardMessage } from './protocol.js';
 import { deviceId, loadState, saveState } from './state.js';
 import { getClipboard, setClipboard } from './clipboard.js';
 import { localIPv4s } from './net.js';
+import {
+  encodeJsonFrame,
+  decodeJsonFrame,
+  parseFrames,
+  clipboardMessage,
+  fileMessage,
+  FRAME_JSON,
+  FRAME_BINARY
+} from './protocol.js';
 
 export class Client {
   constructor({ host, port = TCP_PORT, pin }) {
@@ -28,7 +36,7 @@ export class Client {
 
     this.socket = null;
     this.salt = null;
-    this.buffer = '';
+    this.buffer = Buffer.alloc(0);
     this.lastHash = null;
   }
 
@@ -40,7 +48,6 @@ export class Client {
       });
 
       this.socket = socket;
-      socket.setEncoding('utf8');
 
       /*
        * TCP connection established.
@@ -52,7 +59,7 @@ export class Client {
         );
 
         socket.write(
-          line({
+          encodeJsonFrame({
             type: 'auth',
             protocol: PROTOCOL,
             deviceId: this.id,
@@ -77,88 +84,93 @@ export class Client {
        * before being passed to handleApplication().
        */
       socket.on('data', chunk => {
-        this.buffer += chunk;
+        this.buffer = Buffer.concat([
+          this.buffer,
+          chunk
+        ]);
 
         try {
-          const parsed = parseLines(this.buffer);
+          const parsed = parseFrames(this.buffer);
           this.buffer = parsed.buffer;
 
-          for (const msg of parsed.messages) {
-            console.log(`[RECV] ${msg.type}`);
+          for (const frame of parsed.frames) {
+            if (frame.type === FRAME_JSON) {
+              const msg = decodeJsonFrame(frame.payload);
 
-            /*
-             * Authentication successful.
-             */
-            if (msg.type === 'auth.ok') {
-              this.salt = msg.salt;
+              console.log(`[RECV] ${msg.type}`);
 
-              console.log(
-                `Connected to Hub ${msg.hubId} ` +
-                `at ${this.host}:${this.port}`
-              );
+              if (msg.type === 'auth.ok') {
+                this.salt = msg.salt;
 
-              /*
-               * Trusted Device information.
-               */
-              if (msg.trusted) {
-                if (msg.reconnect) {
-                  console.log(
-                    '[TRUSTED] Existing trusted device. Reconnected.'
+                console.log(
+                  `Connected to Hub ${msg.hubId} ` +
+                  `at ${this.host}:${this.port}`
+                );
+
+                if (msg.trusted) {
+                  if (msg.reconnect) {
+                    console.log(
+                      '[TRUSTED] Existing trusted device. Reconnected.'
+                    );
+                  } else {
+                    console.log(
+                      '[TRUSTED] Device paired and added to trusted devices.'
+                    );
+                  }
+                }
+
+                resolve();
+              }
+
+              else if (msg.type === 'secure') {
+                console.log('[RECV] secure message');
+
+                try {
+                  const payload = decryptObject(
+                    msg.envelope,
+                    this.pin,
+                    this.salt
                   );
-                } else {
+
                   console.log(
-                    '[TRUSTED] Device paired and added to trusted devices.'
+                    `[DECRYPT] ${payload.type || 'unknown'}`
+                  );
+
+                  this.handleApplication(payload);
+                } catch (e) {
+                  console.error(
+                    `[DECRYPT ERROR] ${e.message}`
                   );
                 }
               }
 
-              resolve();
-            }
+              else if (msg.type === 'error') {
+                if (msg.code === 'DEVICE_REVOKED') {
+                  reject(
+                    new Error(
+                      'This device has been revoked by the Hub.'
+                    )
+                  );
+                } else {
+                  reject(new Error(msg.code));
+                }
 
-            /*
-             * Encrypted application message.
-             *
-             * This was the missing part.
-             */
-            else if (msg.type === 'secure') {
-              console.log('[RECV] secure message');
-
-              try {
-                const payload = decryptObject(
-                  msg.envelope,
-                  this.pin,
-                  this.salt
-                );
-
-                console.log(
-                  `[DECRYPT] ${payload.type || 'unknown'}`
-                );
-
-                this.handleApplication(payload);
-              } catch (e) {
-                console.error(
-                  `[DECRYPT ERROR] ${e.message}`
-                );
+                socket.destroy();
               }
             }
 
-            /*
-             * Error from Hub.
-             */
-            else if (msg.type === 'error') {
-              if (msg.code === 'DEVICE_REVOKED') {
-                reject(
-                  new Error(
-                    'This device has been revoked by the Hub.'
-                  )
-                );
-              } else {
-                reject(
-                  new Error(msg.code)
-                );
-              }
+            else if (frame.type === FRAME_BINARY) {
+              console.log(
+                `[RECV] binary frame: ${frame.payload.length} bytes`
+              );
 
-              socket.destroy();
+              // File handling will be added in the next step.
+            }
+
+            else {
+              console.warn(
+                `[PROTOCOL] Unknown frame type: ${frame.type}`
+              );
             }
           }
         } catch (e) {
@@ -255,7 +267,7 @@ export class Client {
     this.lastHash = payload.hash;
 
     this.socket.write(
-      line({
+      encodeJsonFrame({
         type: 'secure',
         envelope: encryptObject(
           payload,
@@ -288,7 +300,7 @@ export async function discover(timeoutMs = 1800) {
 
       try {
         socket.close();
-      } catch {}
+      } catch { }
 
       resolve([...found.values()]);
     };
@@ -317,7 +329,7 @@ export async function discover(timeoutMs = 1800) {
             }
           );
         }
-      } catch {}
+      } catch { }
     });
 
     socket.bind(() => {

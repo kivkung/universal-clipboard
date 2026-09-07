@@ -1,5 +1,68 @@
 import crypto from 'node:crypto';
 
+const FRAME_HEADER_SIZE = 5;
+
+const FRAME_JSON = 0x01;
+const FRAME_BINARY = 0x02;
+
+export function encodeFrame(type, payload) {
+  if (!Buffer.isBuffer(payload)) {
+    payload = Buffer.from(payload);
+  }
+
+  const header = Buffer.alloc(FRAME_HEADER_SIZE);
+
+  header.writeUInt32BE(payload.length, 0);
+  header.writeUInt8(type, 4);
+
+  return Buffer.concat([header, payload]);
+}
+
+export function encodeJsonFrame(obj) {
+  const payload = Buffer.from(
+    JSON.stringify(obj),
+    'utf8'
+  );
+
+  return encodeFrame(FRAME_JSON, payload);
+}
+
+export function decodeJsonFrame(payload) {
+  return JSON.parse(
+    payload.toString('utf8')
+  );
+}
+
+export function parseFrames(buffer) {
+  const frames = [];
+
+  while (buffer.length >= FRAME_HEADER_SIZE) {
+    const length = buffer.readUInt32BE(0);
+    const type = buffer.readUInt8(4);
+
+    if (buffer.length < FRAME_HEADER_SIZE + length) {
+      break;
+    }
+
+    const start = FRAME_HEADER_SIZE;
+    const end = start + length;
+
+    const payload = buffer.subarray(start, end);
+
+    frames.push({
+      type,
+      payload
+    });
+
+    buffer = buffer.subarray(end);
+  }
+
+  return {
+    frames,
+    buffer
+  };
+}
+
 export function line(obj) {
   return JSON.stringify(obj) + '\n';
 }
