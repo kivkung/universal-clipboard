@@ -63,18 +63,13 @@ export function createFileEncryptor(pin, saltString) {
 export function createFileDecryptor(
   pin,
   saltString,
-  iv,
-  tag
+  iv
 ) {
   const key = deriveKey(pin, saltString);
 
-  const decipher = crypto.createDecipheriv(
+  return crypto.createDecipheriv(
     'aes-256-gcm',
     key,
     iv
   );
-
-  decipher.setAuthTag(tag);
-
-  return decipher;
 }

@@ -47,6 +47,8 @@ export class Hub {
 
     this.sockets = new Map();
 
+    this.fileTransfers = new Map();
+
     this.lastHash = null;
 
     this.server = null;
@@ -111,6 +113,14 @@ export class Hub {
               if (!peer) {
                 console.log(
                   '[REJECTED] Binary frame before authentication'
+                );
+
+                continue;
+              }
+
+              if (!this.fileTransfers.has(chunk.transferId)) {
+                console.log(
+                  `[REJECTED] Unknown transfer ${chunk.transferId}`
                 );
 
                 continue;
@@ -328,9 +338,64 @@ export class Hub {
     socket.on('error', () => { });
   }
 
+
+
   handleApplication(payload, fromId) {
-    if (payload.type !== 'clipboard.push') return;
+    if (
+      payload.type !== 'clipboard.push' &&
+      payload.type !== 'file.start' &&
+      payload.type !== 'file.end') return;
+
+    if (payload.type === 'file.start') {
+      this.fileTransfers.set(
+        payload.transferId,
+        {
+          senderId: fromId,
+          name: payload.file.name,
+          mime: payload.file.mime,
+          size: payload.file.size,
+          hash: payload.file.hash,
+          iv: payload.iv
+        }
+      );
+
+      console.log(
+        `[FILE] START ${payload.transferId} ` +
+        `${payload.file.name} (${payload.file.size} bytes)`
+      );
+
+      return;
+    }
+
+    if (payload.type === 'file.end') {
+      const transfer = this.fileTransfers.get(
+        payload.transferId
+      );
+
+      if (!transfer) {
+        console.log(
+          `[REJECTED] Unknown transfer ${payload.transferId}`
+        );
+        return;
+      }
+
+      console.log(
+        `[FILE] END ${payload.transferId} ` +
+        `${transfer.name}`
+      );
+
+      transfer.hash = payload.hash;
+      transfer.authTag = payload.authTag;
+
+      this.fileTransfers.delete(
+        payload.transferId
+      );
+
+      return;
+    }
+
     if (!payload.hash || payload.hash === this.lastHash) return;
+
     this.lastHash = payload.hash;
     console.log(`[CLIPBOARD] ${fromId} → ${payload.contentType} ${payload.content?.length ?? 0} bytes`);
     try { setClipboard(payload.content); } catch { }
@@ -398,15 +463,15 @@ export class Hub {
   revoke(id) {
 
     /*
-     * IMPORTANT:
-     *
-     * Do NOT only delete the peer.
-     *
-     * If we only delete peers[id], the device can simply
-     * join again because it still knows the PIN.
-     *
-     * Therefore we maintain a persistent revoked list.
-     */
+    * IMPORTANT:
+    *
+    * Do NOT only delete the peer.
+    *
+    * If we only delete peers[id], the device can simply
+    * join again because it still knows the PIN.
+    *
+    * Therefore we maintain a persistent revoked list.
+    */
 
     if (!this.state.revokedDevices) {
       this.state.revokedDevices = [];
@@ -414,8 +479,8 @@ export class Hub {
 
 
     /*
-     * Avoid duplicate IDs in revokedDevices.
-     */
+    * Avoid duplicate IDs in revokedDevices.
+    */
 
     if (
       !this.state.revokedDevices.includes(id)
@@ -425,25 +490,25 @@ export class Hub {
 
 
     /*
-     * Remove from the currently trusted device list.
-     */
+    * Remove from the currently trusted device list.
+    */
 
     delete this.state.peers[id];
 
 
     /*
-     * Persist BEFORE disconnecting.
-     *
-     * This guarantees that even if the client immediately
-     * tries to reconnect, the Hub already knows it is revoked.
-     */
+    * Persist BEFORE disconnecting.
+    *
+    * This guarantees that even if the client immediately
+    * tries to reconnect, the Hub already knows it is revoked.
+    */
 
     saveState(this.state);
 
 
     /*
-     * Disconnect active session if it exists.
-     */
+    * Disconnect active session if it exists.
+    */
 
     const socket =
       this.sockets.get(id);

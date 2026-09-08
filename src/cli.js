@@ -19,6 +19,7 @@ Commands:
   devices                      Show trusted/known devices (Hub only)
   revoke <deviceId>            Revoke a device (Hub only)
   push [text]                  Send text to the current Hub / Hub peers
+  send-file <path>             Send a file to the current Hub
   watch                        Watch local clipboard and sync changes
 `);
 }
@@ -224,6 +225,45 @@ async function main() {
     await client.connect();
     client.push(text);
     setTimeout(() => client.socket?.end(), 150);
+    return;
+  }
+
+  if (cmd === 'send-file') {
+    const filePath = args[0];
+
+    if (!filePath) {
+      return usage();
+    }
+
+    const s = loadState();
+
+    if (s.role === 'hub') {
+      return console.log(
+        'Sending files from Hub is not wired yet.'
+      );
+    }
+
+    if (!s.hub?.host || !s.pin) {
+      return console.log(
+        'No Hub configured. Use join first.'
+      );
+    }
+
+    const client = new Client({
+      host: s.hub.host,
+      port: s.hub.port,
+      pin: s.pin
+    });
+
+    await client.connect();
+
+    try {
+      client.sendFile(filePath);
+      console.log('[FILE] Send complete.');
+    } finally {
+      client.socket?.end();
+    }
+
     return;
   }
 
