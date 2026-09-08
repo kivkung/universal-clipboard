@@ -118,3 +118,83 @@ export function fileMessage({
     timestamp: Date.now()
   };
 }
+
+export function fileStartMessage({
+  senderId,
+  transferId,
+  name,
+  mime,
+  size,
+  hash,
+  iv
+}) {
+  return {
+    type: 'file.start',
+    id: crypto.randomUUID(),
+    senderId,
+    transferId,
+    file: {
+      name,
+      mime,
+      size,
+      hash
+    },
+    iv,
+    timestamp: Date.now()
+  };
+}
+
+const BINARY_CHUNK_HEADER_SIZE = 20;
+
+export function encodeBinaryChunk({
+  transferId,
+  sequence,
+  data
+}) {
+  if (!Buffer.isBuffer(data)) {
+    data = Buffer.from(data);
+  }
+
+  const transferIdBuffer = Buffer.from(
+    transferId.replaceAll('-', ''),
+    'hex'
+  );
+
+  if (transferIdBuffer.length !== 16) {
+    throw new Error('Invalid transferId');
+  }
+
+  const header = Buffer.alloc(BINARY_CHUNK_HEADER_SIZE);
+
+  transferIdBuffer.copy(header, 0);
+  header.writeUInt32BE(sequence, 16);
+
+  return Buffer.concat([
+    header,
+    data
+  ]);
+}
+
+export function decodeBinaryChunk(payload) {
+  if (payload.length < BINARY_CHUNK_HEADER_SIZE) {
+    throw new Error('Binary chunk too small');
+  }
+
+  const transferId = payload
+    .subarray(0, 16)
+    .toString('hex')
+    .match(/.{1,8}/g)
+    .join('-');
+
+  const sequence = payload.readUInt32BE(16);
+
+  const data = payload.subarray(
+    BINARY_CHUNK_HEADER_SIZE
+  );
+
+  return {
+    transferId,
+    sequence,
+    data
+  };
+}

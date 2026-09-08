@@ -7,8 +7,10 @@ import { deviceId, loadState, saveState } from './state.js';
 import { localIPv4s } from './net.js';
 import { getClipboard, setClipboard } from './clipboard.js';
 import {
+  encodeFrame,
   encodeJsonFrame,
   decodeJsonFrame,
+  decodeBinaryChunk,
   parseFrames,
   FRAME_JSON,
   FRAME_BINARY
@@ -98,9 +100,29 @@ export class Hub {
 
           if (frame.type !== FRAME_JSON) {
             if (frame.type === FRAME_BINARY) {
+              const chunk = decodeBinaryChunk(frame.payload);
+
               console.log(
-                `[HUB RECV] binary frame: ${frame.payload.length} bytes`
+                `[HUB RECV] binary chunk ` +
+                `${chunk.transferId} #${chunk.sequence} ` +
+                `${chunk.data.length} bytes`
               );
+
+              if (!peer) {
+                console.log(
+                  '[REJECTED] Binary frame before authentication'
+                );
+
+                continue;
+              }
+
+              for (const [id, targetSocket] of this.sockets) {
+                if (id === peer.id) continue;
+
+                targetSocket.write(
+                  encodeFrame(FRAME_BINARY, frame.payload)
+                );
+              }
             }
 
             continue;
