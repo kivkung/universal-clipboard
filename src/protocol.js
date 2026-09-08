@@ -180,11 +180,16 @@ export function decodeBinaryChunk(payload) {
     throw new Error('Binary chunk too small');
   }
 
-  const transferId = payload
+  const hex = payload
     .subarray(0, 16)
-    .toString('hex')
-    .match(/.{1,8}/g)
-    .join('-');
+    .toString('hex');
+
+  const transferId =
+    hex.slice(0, 8) + '-' +
+    hex.slice(8, 12) + '-' +
+    hex.slice(12, 16) + '-' +
+    hex.slice(16, 20) + '-' +
+    hex.slice(20, 32);
 
   const sequence = payload.readUInt32BE(16);
 

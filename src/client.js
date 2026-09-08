@@ -21,6 +21,7 @@ import {
   encodeJsonFrame,
   decodeJsonFrame,
   parseFrames,
+  encodeFrame,
   clipboardMessage,
   fileMessage,
   fileStartMessage,
@@ -185,7 +186,14 @@ export class Client {
                 continue;
               }
 
-              transfer.chunks.push(chunk);
+              const decrypted = transfer.decryptor.update(chunk.data);
+
+              if (decrypted.length > 0) {
+                fs.appendFileSync(
+                  transfer.outputPath,
+                  decrypted
+                );
+              }
             }
 
             else {
@@ -236,6 +244,11 @@ export class Client {
           process.cwd(),
           payload.file.name
         ),
+        decryptor: createFileDecryptor(
+          this.pin,
+          this.salt,
+          Buffer.from(payload.iv, 'base64url')
+        ),
         chunks: []
       });
 
@@ -256,6 +269,25 @@ export class Client {
 
       transfer.hash = payload.hash;
       transfer.authTag = payload.authTag;
+
+      transfer.decryptor.setAuthTag(
+        Buffer.from(payload.authTag, 'base64url')
+      );
+
+      const finalData = transfer.decryptor.final();
+
+      if (finalData.length > 0) {
+        fs.appendFileSync(
+          transfer.outputPath,
+          finalData
+        );
+      }
+
+      console.log(
+        `[FILE] SAVED ${transfer.outputPath}`
+      );
+
+      this.fileTransfers.delete(payload.transferId);
 
       return;
     }
