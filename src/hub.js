@@ -364,6 +364,23 @@ export class Hub {
         `${payload.file.name} (${payload.file.size} bytes)`
       );
 
+      for (const [id, socket] of this.sockets) {
+        if (id === fromId) continue;
+
+        const envelope = encryptObject(
+          payload,
+          this.state.pin,
+          this.state.salt
+        );
+
+        socket.write(
+          encodeJsonFrame({
+            type: 'secure',
+            envelope
+          })
+        );
+      }
+
       return;
     }
 
@@ -386,6 +403,23 @@ export class Hub {
 
       transfer.hash = payload.hash;
       transfer.authTag = payload.authTag;
+
+      for (const [id, socket] of this.sockets) {
+        if (id === fromId) continue;
+
+        const envelope = encryptObject(
+          payload,
+          this.state.pin,
+          this.state.salt
+        );
+
+        socket.write(
+          encodeJsonFrame({
+            type: 'secure',
+            envelope
+          })
+        );
+      }
 
       this.fileTransfers.delete(
         payload.transferId
