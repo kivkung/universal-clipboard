@@ -1,0 +1,17 @@
+{
+  "warning": "TEST VALUES ONLY. Never reuse deterministic IVs in real sessions.",
+  "pin": "123456",
+  "salt": "AQEBAQEBAQEBAQEBAQEBAQ",
+  "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+  "deviceId": "android-test-device",
+  "derivedKeyHex": "abd8129e5c37cfaee19872c3bc74909da46c758f98bc04c612eed5b277951d58",
+  "clientProof": "9280e91886b149694f50e16c2950774302d986512ce8e5038d1bc59bd53be4ba",
+  "hubProof": "fa6304d6f8736f11a08a9c87ce1ed8500d58567557fa433b0fde3b914a832254",
+  "sessionKeyHex": "d3c16175de2952ec99e7890fd470e66347ac2f19b62a6720aa2fefaec68c5b6e",
+  "plaintext": "{\"seq\":0,\"body\":{\"type\":\"ping\"}}",
+  "envelope": {
+    "iv": "AwMDAwMDAwMDAwMD",
+    "tag": "yqiZVAVAMTXB_16-6kQ9tw",
+    "data": "C4YLa8hJpawe18FsdPw1Bki1nIL5sIW2uJc9sJHM-GU"
+  }
+}

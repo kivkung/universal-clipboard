@@ -1,305 +1,108 @@
 #!/usr/bin/env node
-import { Hub } from './hub.js';
-import { Client, discover } from './client.js';
-import { loadState, saveState, deviceId } from './state.js';
-import { getClipboard, setClipboard, platformClipboardHint } from './clipboard.js';
-import { clipboardMessage } from './protocol.js';
+import path from 'node:path';
+import os from 'node:os';
+import { createInterface } from 'node:readline/promises';
+import { parseArgs } from 'node:util';
+import { dataDirectory, deviceId, loadState, saveState } from './state.js';
+import { discover } from './client.js';
+import { startService, control } from './service.js';
+import { clipboardDoctor, readClipboard } from './clipboard.js';
 
-const [cmd, ...args] = process.argv.slice(2);
-
-function usage() {
-  console.log(`
-Universal Clipboard LAN
-
-Commands:
-  host                         Start Local Hub + clipboard endpoint
-  discover                     Find Hub(s) on the LAN
-  join <ip> <port> <pin>       Join a Hub
-  status                       Show local configuration
-  devices                      Show trusted/known devices (Hub only)
-  revoke <deviceId>            Revoke a device (Hub only)
-  push [text]                  Send text to the current Hub / Hub peers
-  send-file <path>             Send a file to the current Hub
-  watch                        Watch local clipboard and sync changes
-`);
-}
-
+const usage = [
+'Universal Clipboard LAN',
+'  uc setup                       Guided first-time setup',
+'  uc start                       Start sync using saved settings',
+'  uc host [--port 3000]           Create a Hub and start sync',
+'  uc join <ip> <pin> [--port 3000] Pair and start sync',
+'  uc discover                    Find Hubs on this LAN',
+'  uc doctor                      Check native clipboard support',
+'  uc status                      Show status (never prints PIN)',
+'  uc devices                     List connected recipients',
+'  uc push [text] [--to ID]        Send text (clipboard if omitted)',
+'  uc send-file <paths...> [--to ID|all]',
+'  uc transfers                   Show unfinished outgoing transfers',
+'  uc resume                      Resume files from confirmed offsets',
+'  uc cancel <transferId>         Remove an inactive unfinished transfer',
+'  uc pause / uc unpause          Pause/resume clipboard sync',
+'  uc rename <name>               Change device name',
+'  uc receive-dir <path>          Choose where received files are saved',
+'  uc revoke <deviceId>           Revoke a device (Hub)',
+'  --data-dir <path>              Separate profile (testing/portable use)',
+'Node.js 22+; keep the start/host/join terminal open.'
+].join('\n');
 async function main() {
-  if (cmd === 'host') {
-    const hub = new Hub();
-    hub.start();
-    await watchLoop(hub);
-    return;
-  }
-
-  if (cmd === 'discover') {
-    const hubs = await discover();
-    if (!hubs.length) return console.log('No Hub found. Check that devices are on the same LAN and UDP broadcast is allowed.');
-    for (const h of hubs) console.log(`Found Hub: ${h.name ?? h.hubId}\n  IP: ${h.address}\n  TCP: ${h.port}\n  Hub ID: ${h.hubId}\n`);
-    return;
-  }
-
-  if (cmd === 'join') {
-    if (args.length < 3) return usage();
-    const [host, port, pin] = args;
-    const client = new Client({ host, port, pin });
-    await client.connect();
-    console.log(`Device ID: ${client.id}`);
-    console.log('Run `node src/cli.js watch` in this terminal to sync clipboard changes.');
-    // Keep connection alive.
-    await watchLoop(client);
-    return;
-  }
-
-  if (cmd === 'status') {
-    const s = loadState();
-    console.log(JSON.stringify({
-      deviceId: s.deviceId ?? deviceId(),
-      role: s.role ?? 'unconfigured',
-      hub: s.hub ?? null,
-      platform: platformClipboardHint()
-    }, null, 2));
-    return;
-  }
-
-  if (cmd === 'devices') {
-
-    const s = loadState();
-
-    if (s.role !== 'hub') {
-      return console.log(
-        'This device is not configured as the Hub.'
-      );
-    }
-
-
-    const peers =
-      Object.values(s.peers ?? {});
-
-
-    if (!peers.length) {
-
-      console.log(
-        'No trusted devices.'
-      );
-
-      return;
-    }
-
-
-    console.log(
-      '\nTrusted Devices\n'
-    );
-
-
-    for (const peer of peers) {
-
-      console.log(
-        `ID:        ${peer.id}`
-      );
-
-      console.log(
-        `Name:      ${peer.name}`
-      );
-
-      console.log(
-        `Status:    ${peer.trusted ? 'TRUSTED' : 'KNOWN'}`
-      );
-
-      console.log(
-        `Address:   ${peer.address}`
-      );
-
-      console.log(
-        `First Seen:${new Date(peer.firstSeen).toISOString()}`
-      );
-
-      console.log(
-        `Last Seen: ${new Date(peer.lastSeen).toISOString()}`
-      );
-
-      console.log(
-        ''
-      );
-    }
-
-    return;
-  }
-
-  if (cmd === 'revoke') {
-
-    const id = args[0];
-
-    if (!id) {
-      return usage();
-    }
-
-
-    const s = loadState();
-
-    if (s.role !== 'hub') {
-      return console.log(
-        'This device is not configured as the Hub.'
-      );
-    }
-
-
-    /*
-     * Check whether the device actually exists.
-     */
-
-    if (!s.peers?.[id]) {
-
-      /*
-       * It may already be revoked.
-       */
-
-      if (
-        s.revokedDevices?.includes(id)
-      ) {
-
-        console.log(
-          `Device ${id} is already revoked.`
-        );
-
-      } else {
-
-        console.log(
-          `Device ${id} not found.`
-        );
-      }
-
-      return;
-    }
-
-
-    /*
-     * Add device to persistent revoked list.
-     */
-
-    s.revokedDevices =
-      s.revokedDevices ?? [];
-
-
-    if (
-      !s.revokedDevices.includes(id)
-    ) {
-
-      s.revokedDevices.push(id);
-    }
-
-
-    /*
-     * Remove it from the trusted peer list.
-     */
-
-    delete s.peers[id];
-
-
-    /*
-     * Persist the change.
-     */
-
-    saveState(s);
-
-
-    console.log(
-      `Revoked ${id}.`
-    );
-
-    return;
-  }
-
-  if (cmd === 'push') {
-    const text = args.length ? args.join(' ') : getClipboard();
-    const s = loadState();
-    if (s.role === 'hub') {
-      // Reuse Hub in-process to send to connected peers.
-      const hub = new Hub();
-      hub.pushFromHub(clipboardMessage({ senderId: hub.id, text }));
-      console.log('Hub push requires the Hub process to be running; use the host terminal or watch mode for the live session.');
-      return;
-    }
-    if (!s.hub?.host) return console.log('No Hub configured. Use join first.');
-    const client = new Client({ host: s.hub.host, port: s.hub.port, pin: s.pin });
-    await client.connect();
-    client.push(text);
-    setTimeout(() => client.socket?.end(), 150);
-    return;
-  }
-
-  if (cmd === 'send-file') {
-    const filePath = args[0];
-
-    if (!filePath) {
-      return usage();
-    }
-
-    const s = loadState();
-
-    if (s.role === 'hub') {
-      return console.log(
-        'Sending files from Hub is not wired yet.'
-      );
-    }
-
-    if (!s.hub?.host || !s.pin) {
-      return console.log(
-        'No Hub configured. Use join first.'
-      );
-    }
-
-    const client = new Client({
-      host: s.hub.host,
-      port: s.hub.port,
-      pin: s.pin
-    });
-
-    await client.connect();
-
-    try {
-      client.sendFile(filePath);
-      console.log('[FILE] Send complete.');
-    } finally {
-      client.socket?.end();
-    }
-
-    return;
-  }
-
-  if (cmd === 'watch') {
-    const s = loadState();
-    if (s.role === 'hub') {
-      const hub = new Hub(); hub.start(); await watchLoop(hub); return;
-    }
-    if (!s.hub?.host || !s.pin) return console.log('No Hub configured. Use join first.');
-    const client = new Client({ host: s.hub.host, port: s.hub.port, pin: s.pin });
-    await client.connect(); await watchLoop(client); return;
-  }
-
-  usage();
-}
-
-async function watchLoop(node) {
-  let last = '';
-  try { last = getClipboard(); } catch { }
-  console.log('Clipboard watcher running. Press Ctrl+C to stop.');
-  setInterval(() => {
-    try {
-      const current = getClipboard();
-      if (current !== last) {
-        last = current;
-        const payload = clipboardMessage({ senderId: node.id, text: current });
-        if (node instanceof Hub) {
-          node.pushFromHub(payload);
-        } else {
-          node.push(current);
+  const { positionals, values } = parseArgs({ allowPositionals: true, options: { to: { type: 'string' }, port: { type: 'string', default: '3000' }, 'data-dir': { type: 'string' }, help: { type: 'boolean' } } });
+  if (values['data-dir']) process.env.UC_DATA_DIR = path.resolve(values['data-dir']);
+  let [cmd, ...args] = positionals;
+  if (values.help || cmd === 'help') { console.log(usage); return; }
+  const port = Number(values.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be 1-65535');
+  const dir = dataDirectory();
+  if (!cmd) cmd = process.stdin.isTTY ? 'setup' : 'help';
+  if (cmd === 'help') { console.log(usage); return; }
+  if (cmd === 'doctor') { const result = await clipboardDoctor(); console.log(JSON.stringify(result, null, 2)); if (!result.ok) process.exitCode = 1; return; }
+  if (cmd === 'discover') { console.table(await discover()); return; }
+  if (['setup', 'host', 'join'].includes(cmd)) {
+    let active = false;
+    try { await control('status'); active = true; } catch {}
+    if (active) throw new Error('Stop the running service with Ctrl+C before changing its pairing.');
+    deviceId(dir);
+    const state = loadState(dir);
+    state.name ||= os.hostname();
+    state.receiveDir ||= path.join(os.homedir(), 'Downloads', 'Universal Clipboard');
+    if (cmd === 'setup') {
+      if (!process.stdin.isTTY) throw new Error('Use uc host or uc join <ip> <pin> in a non-interactive terminal');
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        state.name = (await rl.question('Device name [' + state.name + ']: ')).trim() || state.name;
+        const role = (await rl.question('Create a group (h) or join one (j)? [h]: ')).trim().toLowerCase() || 'h';
+        if (!['h', 'j'].includes(role)) throw new Error('Choose h or j');
+        if (role === 'h') { state.role = 'hub'; state.port = port; }
+        else {
+          const hubs = await discover();
+          if (hubs.length) console.table(hubs.map((h, index) => ({ number: index + 1, name: h.name, address: h.address, port: h.port })));
+          const answer = (await rl.question('Hub number or IP address: ')).trim();
+          const selected = hubs[Number(answer) - 1];
+          const pin = (await rl.question('6-digit PIN shown on the Hub: ')).trim();
+          if (!/^\d{6}$/.test(pin)) throw new Error('PIN must contain 6 digits');
+          state.role = 'client'; state.hub = { host: selected?.address || answer, port: selected?.port || port }; state.pin = pin;
         }
-
-        console.log(`[LOCAL COPY] ${current.length} bytes`);
-      }
-    } catch (e) { }
-  }, 500);
+      } finally { rl.close(); }
+    } else if (cmd === 'host') { state.role = 'hub'; state.port = port; }
+    else {
+      const [host, second, third] = args;
+      const pin = third || second;
+      const actualPort = third ? Number(second) : port;
+      if (!host || !/^\d{6}$/.test(pin || '') || !Number.isInteger(actualPort) || actualPort < 1 || actualPort > 65535) throw new Error('Use uc join <ip> <6-digit-pin> [--port 3000]');
+      state.role = 'client'; state.hub = { host, port: actualPort }; state.pin = pin;
+    }
+    saveState(state, dir); cmd = 'start';
+  }
+  if (cmd === 'start' || cmd === 'watch') {
+    const service = await startService({ dir });
+    const stop = async () => { await service.close(); process.exit(0); };
+    process.once('SIGINT', stop); process.once('SIGTERM', stop); return;
+  }
+  if (cmd === 'status') {
+    try { console.log(JSON.stringify(await control('status'), null, 2)); }
+    catch { const state = loadState(dir); console.log(JSON.stringify({ running: false, role: state.role || 'unconfigured', name: state.name, dataDir: dir }, null, 2)); }
+    return;
+  }
+  let result;
+  if (cmd === 'push') {
+    const text = args.length ? args.join(' ') : (await readClipboard())?.text;
+    if (typeof text !== 'string') throw new Error('Clipboard does not contain text');
+    result = await control(cmd, [text, values.to]);
+  } else if (cmd === 'send-file') {
+    if (!args.length) throw new Error('Specify one or more file paths');
+    result = await control(cmd, [args.map(x => path.resolve(x)), values.to]);
+  } else if (['devices', 'transfers', 'resume', 'pause', 'unpause', 'revoke', 'rename', 'receive-dir', 'cancel'].includes(cmd)) {
+    if (['revoke', 'rename', 'receive-dir', 'cancel'].includes(cmd) && !args.length) throw new Error('Missing argument');
+    if (cmd === 'receive-dir') args[0] = path.resolve(args[0]);
+    result = await control(cmd, args);
+  } else throw new Error('Unknown command. Use uc --help');
+  console.log(JSON.stringify(result, null, 2));
+  const failed = value => value && typeof value === 'object' && (value.error || value.clipboardError || Object.values(value).some(failed));
+  if (failed(result)) process.exitCode = 1;
 }
-
-main().catch(err => { console.error(`[ERROR] ${err.message}`); process.exitCode = 1; });
+main().catch(error => { console.error('Error: ' + error.message); process.exitCode = 1; });

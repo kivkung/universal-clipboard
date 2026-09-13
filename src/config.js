@@ -1,6 +1,7 @@
 export const TCP_PORT = 3000;
 export const DISCOVERY_PORT = 3001;
-export const DISCOVERY_INTERVAL_MS = 2000;
-export const PROTOCOL = 'ucp/0.1';
-export const GROUP_SALT_BYTES = 16;
-export const PIN_LENGTH = 6;
+export const PROTOCOL = 'ucp/2';
+export const CHUNK_SIZE = 64 * 1024;
+export const MAX_FRAME_SIZE = 2 * 1024 * 1024;
+export const MAX_IMAGE_SIZE = 32 * 1024 * 1024;
+export const MAX_FILE_SIZE = 10 * 1024 ** 3;

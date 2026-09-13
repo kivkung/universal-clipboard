@@ -1,565 +1,103 @@
 import net from 'node:net';
 import dgram from 'node:dgram';
-import os from 'node:os';
+import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { TCP_PORT, DISCOVERY_PORT, PROTOCOL } from './config.js';
-import { encryptObject, decryptObject, randomPin, randomSalt } from './crypto.js';
-import { deviceId, loadState, saveState } from './state.js';
-import { localIPv4s } from './net.js';
-import { getClipboard, setClipboard } from './clipboard.js';
-import {
-  encodeFrame,
-  encodeJsonFrame,
-  decodeJsonFrame,
-  decodeBinaryChunk,
-  parseFrames,
-  FRAME_JSON,
-  FRAME_BINARY
-} from './protocol.js';
+import { deriveKey, proof, equalProof, sessionKey, encryptObject, decryptObject, randomPin, randomSalt } from './crypto.js';
+import { readFrames, writeFrame } from './protocol.js';
 
-export class Hub {
-  constructor() {
-    this.id = deviceId();
-
-    this.state = loadState();
-
-    this.state.role = 'hub';
-
-    this.state.pin =
-      this.state.pin ?? randomPin();
-
-    this.state.salt =
-      this.state.salt ?? randomSalt();
-
-    // Existing v0.1.1 peer list
-    this.state.peers =
-      this.state.peers ?? {};
-
-    // New:
-    // Devices that were explicitly revoked.
-    //
-    // We keep revoked IDs separately instead of simply
-    // deleting them from peers. Otherwise a revoked device
-    // could join again with the correct PIN.
-    this.state.revokedDevices =
-      this.state.revokedDevices ?? [];
-
-    saveState(this.state);
-
-    this.sockets = new Map();
-
-    this.fileTransfers = new Map();
-
-    this.lastHash = null;
-
-    this.server = null;
-
-    this.discovery = null;
+export class Hub extends EventEmitter {
+  constructor({ state = {}, save = () => {}, port = TCP_PORT, discoveryPort = DISCOVERY_PORT, bind = '0.0.0.0' } = {}) {
+    super();
+    this.state = state; this.save = save; this.port = port; this.discoveryPort = discoveryPort; this.bind = bind;
+    state.pin ??= randomPin(); state.salt ??= randomSalt(); state.peers ??= {}; state.revokedDevices ??= [];
+    this.key = deriveKey(state.pin, state.salt);
+    this.sessions = new Map(); this.connections = new Set(); this.failures = new Map();
+    save(state);
   }
-
-  start() {
-    this.server = net.createServer(socket => this.handleSocket(socket));
-    this.server.listen(TCP_PORT, '0.0.0.0', () => {
-      console.log('\nUniversal Clipboard LAN');
-      console.log('ROLE: HUB + CLIENT');
-      console.log(`DEVICE: ${this.id}`);
-      console.log(`TCP: ${TCP_PORT}`);
-      console.log(`DISCOVERY: UDP ${DISCOVERY_PORT}`);
-      console.log(`PIN: ${this.state.pin}`);
-      console.log('\nLAN addresses:');
-      for (const x of localIPv4s()) console.log(`  ${x.name}: ${x.address}`);
-      console.log('\nWaiting for devices...');
-    });
-
-    this.discovery = dgram.createSocket('udp4');
-    this.discovery.bind(DISCOVERY_PORT, '0.0.0.0', () => {
-      this.discovery.setBroadcast(true);
-    });
-    this.discovery.on('message', (buf, rinfo) => {
-      try {
-        const msg = JSON.parse(buf.toString());
-        if (msg.type === 'uc.discover') {
-          const reply = Buffer.from(JSON.stringify({
-            type: 'uc.hub', protocol: PROTOCOL, hubId: this.id,
-            port: TCP_PORT, name: osName()
-          }));
-          this.discovery.send(reply, rinfo.port, rinfo.address);
-        }
-      } catch { }
-    });
-  }
-
-  handleSocket(socket) {
-    let buffer = Buffer.alloc(0);
-    let peer = null;
-    socket.on('data', chunk => {
-      buffer = Buffer.concat([buffer, chunk]);
-
-      try {
-        const parsed = parseFrames(buffer);
-        buffer = parsed.buffer;
-
-        for (const frame of parsed.frames) {
-
-          if (frame.type !== FRAME_JSON) {
-            if (frame.type === FRAME_BINARY) {
-              const chunk = decodeBinaryChunk(frame.payload);
-
-              console.log(
-                `[HUB RECV] binary chunk ` +
-                `${chunk.transferId} #${chunk.sequence} ` +
-                `${chunk.data.length} bytes`
-              );
-
-              if (!peer) {
-                console.log(
-                  '[REJECTED] Binary frame before authentication'
-                );
-
-                continue;
-              }
-
-              if (!this.fileTransfers.has(chunk.transferId)) {
-                console.log(
-                  `[REJECTED] Unknown transfer ${chunk.transferId}`
-                );
-
-                continue;
-              }
-
-              for (const [id, targetSocket] of this.sockets) {
-                if (id === peer.id) continue;
-
-                targetSocket.write(
-                  encodeFrame(FRAME_BINARY, frame.payload)
-                );
-              }
-            }
-
-            continue;
-          }
-
-          const msg = decodeJsonFrame(frame.payload);
-
-          if (msg.type === 'auth') {
-
-            // ==================================================
-            // Authentication
-            // ==================================================
-
-            if (msg.pin !== this.state.pin) {
-              socket.write(
-                encodeJsonFrame({
-                  type: 'error',
-                  code: 'BAD_PIN'
-                })
-              );
-
-              socket.destroy();
-              return;
-            }
-
-            if (!msg.deviceId) {
-              socket.write(
-                encodeJsonFrame({
-                  type: 'error',
-                  code: 'DEVICE_ID_REQUIRED'
-                })
-              );
-
-              socket.destroy();
-              return;
-            }
-
-            // ==================================================
-            // Check revoked device
-            // ==================================================
-
-            if (this.state.revokedDevices.includes(msg.deviceId)) {
-
-              console.log(
-                `[REJECTED] Revoked device ${msg.deviceId}`
-              );
-
-              socket.write(
-                encodeJsonFrame({
-                  type: 'error',
-                  code: 'DEVICE_REVOKED'
-                })
-              );
-
-              socket.destroy();
-              return;
-            }
-
-            // ==================================================
-            // Trusted Device
-            // ==================================================
-
-            const existing =
-              this.state.peers[msg.deviceId];
-
-            const isTrusted =
-              Boolean(existing?.trusted);
-
-            peer = {
-              id: msg.deviceId,
-              socket,
-              address: socket.remoteAddress
-            };
-
-            this.sockets.set(
-              peer.id,
-              socket
-            );
-
-            const now = Date.now();
-
-            this.state.peers[peer.id] = {
-              id: peer.id,
-              name:
-                msg.name ??
-                existing?.name ??
-                peer.id,
-
-              address:
-                socket.remoteAddress,
-
-              trusted: true,
-
-              firstSeen:
-                existing?.firstSeen ??
-                now,
-
-              lastSeen:
-                now
-            };
-
-            saveState(this.state);
-
-            // ==================================================
-            // Authentication success
-            // ==================================================
-
-            socket.write(
-              encodeJsonFrame({
-                type: 'auth.ok',
-                protocol: PROTOCOL,
-                hubId: this.id,
-                salt: this.state.salt,
-                trusted: true,
-                reconnect: isTrusted
-              })
-            );
-
-            if (isTrusted) {
-
-              console.log(
-                `\n[RECONNECT] Trusted device ${peer.id} ` +
-                `from ${socket.remoteAddress}`
-              );
-
-            } else {
-
-              console.log(
-                `\n[PAIR] New trusted device ${peer.id} ` +
-                `from ${socket.remoteAddress}`
-              );
-
-            }
-
-          }
-
-          // ====================================================
-          // Receive encrypted application data from Client
-          // ====================================================
-
-          else if (msg.type === 'secure') {
-
-            if (!peer) {
-              console.log(
-                '[REJECTED] Secure message before authentication'
-              );
-
-              socket.write(
-                encodeJsonFrame({
-                  type: 'error',
-                  code: 'NOT_AUTHENTICATED'
-                })
-              );
-
-              return;
-            }
-
-            try {
-
-              console.log(
-                `[HUB RECV] secure message from ${peer.id}`
-              );
-
-              const payload = decryptObject(
-                msg.envelope,
-                this.state.pin,
-                this.state.salt
-              );
-
-              console.log(
-                `[HUB DECRYPT] ${payload.type || 'unknown'}`
-              );
-
-              this.handleApplication(
-                payload,
-                peer.id
-              );
-
-            } catch (e) {
-
-              console.error(
-                `[HUB DECRYPT ERROR] ${e.message}`
-              );
-
-              socket.write(
-                encodeJsonFrame({
-                  type: 'error',
-                  code: 'BAD_ENCRYPTED_MESSAGE'
-                })
-              );
-            }
-
-          }
-
-        }
-      } catch (e) {
-        socket.write(encodeJsonFrame({ type: 'error', code: 'BAD_MESSAGE' }));
-      }
-    });
-    socket.on('close', () => {
-      if (peer) this.sockets.delete(peer.id);
-    });
-    socket.on('error', () => { });
-  }
-
-
-
-  handleApplication(payload, fromId) {
-    if (
-      payload.type !== 'clipboard.push' &&
-      payload.type !== 'file.start' &&
-      payload.type !== 'file.end') return;
-
-    if (payload.type === 'file.start') {
-      this.fileTransfers.set(
-        payload.transferId,
-        {
-          senderId: fromId,
-          name: payload.file.name,
-          mime: payload.file.mime,
-          size: payload.file.size,
-          hash: payload.file.hash,
-          iv: payload.iv
-        }
-      );
-
-      console.log(
-        `[FILE] START ${payload.transferId} ` +
-        `${payload.file.name} (${payload.file.size} bytes)`
-      );
-
-      for (const [id, socket] of this.sockets) {
-        if (id === fromId) continue;
-
-        const envelope = encryptObject(
-          payload,
-          this.state.pin,
-          this.state.salt
-        );
-
-        socket.write(
-          encodeJsonFrame({
-            type: 'secure',
-            envelope
-          })
-        );
-      }
-
-      return;
+  async start() {
+    this.server = net.createServer(socket => this.accept(socket));
+    await new Promise((resolve, reject) => { this.server.once('error', reject); this.server.listen(this.port, this.bind, resolve); });
+    this.port = this.server.address().port;
+    this.server.on('error', error => this.emit('warning', error.message));
+    if (this.discoveryPort !== false) {
+      this.discovery = dgram.createSocket('udp4');
+      this.discovery.on('error', error => this.emit('warning', 'Discovery: ' + error.message));
+      this.discovery.on('message', (data, remote) => {
+        if (data.length > 512) return;
+        try {
+          const msg = JSON.parse(data);
+          if (msg.type !== 'uc.discover' || msg.protocol !== PROTOCOL) return;
+          const response = { type: 'uc.hub', protocol: PROTOCOL, hubId: this.state.deviceId, name: this.state.name, port: this.port };
+          this.discovery.send(Buffer.from(JSON.stringify(response)), remote.port, remote.address, () => {});
+        } catch {}
+      });
+      this.discovery.bind(this.discoveryPort, this.bind);
     }
-
-    if (payload.type === 'file.end') {
-      const transfer = this.fileTransfers.get(
-        payload.transferId
-      );
-
-      if (!transfer) {
-        console.log(
-          `[REJECTED] Unknown transfer ${payload.transferId}`
-        );
+    return this.port;
+  }
+  accept(socket) {
+    const ip = socket.remoteAddress;
+    const fail = this.failures.get(ip);
+    if (this.connections.size >= 64 || (fail && fail.count >= 5 && fail.until > Date.now())) { socket.destroy(); return; }
+    this.connections.add(socket);
+    socket.setKeepAlive(true, 10_000); socket.setTimeout(30_000, () => socket.destroy());
+    const nonce = crypto.randomBytes(32).toString('base64url');
+    let peer;
+    const timer = setTimeout(() => socket.destroy(), 10_000);
+    const failAuth = async code => {
+      const old = this.failures.get(ip);
+      this.failures.set(ip, { count: old && old.until > Date.now() ? old.count + 1 : 1, until: Date.now() + 60_000 });
+      if (this.failures.size > 1024) this.failures.delete(this.failures.keys().next().value);
+      await writeFrame(socket, { type: 'error', code }); socket.end();
+    };
+    writeFrame(socket, { type: 'challenge', protocol: PROTOCOL, nonce, salt: this.state.salt, hubId: this.state.deviceId }).catch(() => socket.destroy());
+    readFrames(socket, async msg => {
+      if (!peer) {
+        if (msg.type !== 'auth' || msg.protocol !== PROTOCOL) return failAuth('PROTOCOL_MISMATCH');
+        if (typeof msg.deviceId !== 'string' || !/^[a-zA-Z0-9-]{8,64}$/.test(msg.deviceId) || typeof msg.name !== 'string' || msg.name.length > 80) return failAuth('BAD_IDENTITY');
+        if (this.state.revokedDevices.includes(msg.deviceId)) return failAuth('DEVICE_REVOKED');
+        if (!equalProof(msg.proof, proof(this.key, nonce + ':' + msg.deviceId))) return failAuth('BAD_PIN');
+        // A second terminal must use local control rather than replacing the live receiver.
+        if (this.sessions.has(msg.deviceId)) return failAuth('DEVICE_ALREADY_CONNECTED');
+        peer = { id: msg.deviceId, name: msg.name, socket, key: sessionKey(this.key, nonce), sendSeq: 0, recvSeq: 0 };
+        this.sessions.set(peer.id, peer); clearTimeout(timer);
+        this.state.peers[peer.id] = { id: peer.id, name: peer.name, lastSeen: Date.now() }; this.save(this.state);
+        await writeFrame(socket, { type: 'auth.ok', proof: proof(this.key, 'hub:' + nonce) });
         return;
       }
-
-      console.log(
-        `[FILE] END ${payload.transferId} ` +
-        `${transfer.name}`
-      );
-
-      transfer.hash = payload.hash;
-      transfer.authTag = payload.authTag;
-
-      for (const [id, socket] of this.sockets) {
-        if (id === fromId) continue;
-
-        const envelope = encryptObject(
-          payload,
-          this.state.pin,
-          this.state.salt
-        );
-
-        socket.write(
-          encodeJsonFrame({
-            type: 'secure',
-            envelope
-          })
-        );
+      if (msg.type !== 'secure') throw new Error('Expected encrypted message');
+      const payload = decryptObject(msg.envelope, peer.key);
+      if (payload.seq !== peer.recvSeq++) throw new Error('Invalid sequence');
+      const body = payload.body;
+      if (!body || typeof body.type !== 'string') throw new Error('Invalid message');
+      if (body.type === 'ping') return this.send(peer, { type: 'pong' });
+      if (body.type === 'devices') {
+        return this.send(peer, { replyTo: body.requestId, from: '@hub', result: [...this.sessions.values()].map(p => ({ id: p.id, name: p.name, online: true })) });
       }
-
-      this.fileTransfers.delete(
-        payload.transferId
-      );
-
-      return;
-    }
-
-    if (!payload.hash || payload.hash === this.lastHash) return;
-
-    this.lastHash = payload.hash;
-    console.log(`[CLIPBOARD] ${fromId} → ${payload.contentType} ${payload.content?.length ?? 0} bytes`);
-    try { setClipboard(payload.content); } catch { }
-    for (const [id, socket] of this.sockets) {
-      if (id === fromId) continue;
-      const envelope = encryptObject(payload, this.state.pin, this.state.salt);
-      socket.write(encodeJsonFrame({ type: 'secure', envelope }));
-    }
+      if (typeof body.to !== 'string') throw new Error('Recipient required');
+      const target = this.sessions.get(body.to);
+      if (!target) {
+        if (body.requestId) await this.send(peer, { replyTo: body.requestId, from: body.to, error: 'Recipient offline', retryable: true });
+        return;
+      }
+      const forwarded = { ...body, from: peer.id }; delete forwarded.seq;
+      try { await this.send(target, forwarded); }
+      catch { target.socket.destroy(); }
+    }, error => this.emit('warning', error.message));
+    socket.on('error', () => {});
+    socket.on('close', () => { clearTimeout(timer); this.connections.delete(socket); if (peer && this.sessions.get(peer.id) === peer) this.sessions.delete(peer.id); });
   }
-
-  pushFromHub(payload) {
-    if (!payload.hash) {
-      console.log('[HUB SEND] No hash');
-      return;
-    }
-
-    if (payload.hash === this.lastHash) {
-      console.log('[HUB SEND] DUPLICATE HASH - NOT SENT');
-      return;
-    }
-
-    this.lastHash = payload.hash;
-
-    try {
-      setClipboard(payload.content);
-    } catch { }
-
-    console.log(
-      `[HUB SEND] ${payload.contentType} ${payload.content?.length ?? 0} bytes`
-    );
-
-    console.log(
-      `[HUB SEND] Connected peers: ${this.sockets.size}`
-    );
-
-    for (const [id, socket] of this.sockets) {
-      console.log(`[HUB SEND] → ${id}`);
-
-      socket.write(
-        encodeJsonFrame({
-          type: 'secure',
-          envelope: encryptObject(
-            payload,
-            this.state.pin,
-            this.state.salt
-          )
-        })
-      );
-    }
-  }
-
-  devices() {
-    return Object.values(
-      this.state.peers ?? {}
-    ).map(peer => ({
-      ...peer,
-
-      // Make sure CLI always has a clear status
-      status: peer.trusted
-        ? 'TRUSTED'
-        : 'KNOWN'
-    }));
-  }
-
+  send(peer, body) { return writeFrame(peer.socket, { type: 'secure', envelope: encryptObject({ seq: peer.sendSeq++, body }, peer.key) }); }
   revoke(id) {
-
-    /*
-    * IMPORTANT:
-    *
-    * Do NOT only delete the peer.
-    *
-    * If we only delete peers[id], the device can simply
-    * join again because it still knows the PIN.
-    *
-    * Therefore we maintain a persistent revoked list.
-    */
-
-    if (!this.state.revokedDevices) {
-      this.state.revokedDevices = [];
-    }
-
-
-    /*
-    * Avoid duplicate IDs in revokedDevices.
-    */
-
-    if (
-      !this.state.revokedDevices.includes(id)
-    ) {
-      this.state.revokedDevices.push(id);
-    }
-
-
-    /*
-    * Remove from the currently trusted device list.
-    */
-
-    delete this.state.peers[id];
-
-
-    /*
-    * Persist BEFORE disconnecting.
-    *
-    * This guarantees that even if the client immediately
-    * tries to reconnect, the Hub already knows it is revoked.
-    */
-
-    saveState(this.state);
-
-
-    /*
-    * Disconnect active session if it exists.
-    */
-
-    const socket =
-      this.sockets.get(id);
-
-    if (socket) {
-      socket.destroy();
-    }
-
-    this.sockets.delete(id);
-
-
-    console.log(
-      `[REVOKE] Device ${id} has been revoked`
-    );
+    if (id === this.state.deviceId) throw new Error('Cannot revoke the Hub endpoint');
+    if (!this.state.revokedDevices.includes(id)) this.state.revokedDevices.push(id);
+    delete this.state.peers[id]; this.save(this.state);
+    this.sessions.get(id)?.socket.destroy();
   }
-}
-
-function osName() {
-  return `UC-HUB-${os.hostname().slice(0, 8)}`;
+  async close() {
+    for (const socket of this.connections) socket.destroy();
+    if (this.discovery) { try { this.discovery.close(); } catch {} }
+    if (this.server?.listening) await new Promise(resolve => this.server.close(resolve));
+  }
 }
