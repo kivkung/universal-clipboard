@@ -1,75 +1,20 @@
 import crypto from 'node:crypto';
-import { GROUP_SALT_BYTES } from './config.js';
-
-export function randomPin() {
-  return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
-}
-
-export function randomSalt() {
-  return crypto.randomBytes(GROUP_SALT_BYTES).toString('base64url');
-}
-
-function deriveKey(pin, saltString) {
-  const salt = Buffer.from(saltString, 'base64url');
-  return crypto.scryptSync(pin, salt, 32, { N: 16384, r: 8, p: 1 });
-}
-
-export function encryptObject(obj, pin, saltString) {
-  const key = deriveKey(pin, saltString);
+export function randomPin() { return String(crypto.randomInt(1_000_000)).padStart(6, '0'); }
+export function randomSalt() { return crypto.randomBytes(16).toString('base64url'); }
+export function deriveKey(pin, salt) { return crypto.scryptSync(pin, Buffer.from(salt, 'base64url'), 32, { N: 16384, r: 8, p: 1 }); }
+export function proof(key, text) { return crypto.createHmac('sha256', key).update(text).digest('hex'); }
+export function equalProof(a, b) { return typeof a === 'string' && /^[0-9a-f]{64}$/.test(a) && crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex')); }
+export function sessionKey(key, nonce) { return crypto.createHmac('sha256', key).update('session:' + nonce).digest(); }
+export function encryptObject(value, key) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const plaintext = Buffer.from(JSON.stringify(obj), 'utf8');
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return {
-    alg: 'AES-256-GCM',
-    iv: iv.toString('base64url'),
-    tag: tag.toString('base64url'),
-    data: ciphertext.toString('base64url')
-  };
+  const data = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
+  return { iv: iv.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), data: data.toString('base64url') };
 }
-
-export function decryptObject(envelope, pin, saltString) {
-  const key = deriveKey(pin, saltString);
-  const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    key,
-    Buffer.from(envelope.iv, 'base64url')
-  );
-  decipher.setAuthTag(Buffer.from(envelope.tag, 'base64url'));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(envelope.data, 'base64url')),
-    decipher.final()
-  ]);
-  return JSON.parse(plaintext.toString('utf8'));
-}
-
-export function createFileEncryptor(pin, saltString) {
-  const key = deriveKey(pin, saltString);
-  const iv = crypto.randomBytes(12);
-
-  const cipher = crypto.createCipheriv(
-    'aes-256-gcm',
-    key,
-    iv
-  );
-
-  return {
-    iv,
-    cipher
-  };
-}
-
-export function createFileDecryptor(
-  pin,
-  saltString,
-  iv
-) {
-  const key = deriveKey(pin, saltString);
-
-  return crypto.createDecipheriv(
-    'aes-256-gcm',
-    key,
-    iv
-  );
+export function decryptObject(value, key) {
+  if (!value || typeof value.iv !== 'string' || typeof value.tag !== 'string' || typeof value.data !== 'string') throw new Error('Invalid envelope');
+  const iv = Buffer.from(value.iv, 'base64url'), tag = Buffer.from(value.tag, 'base64url');
+  if (iv.length !== 12 || tag.length !== 16) throw new Error('Invalid envelope');
+  const cipher = crypto.createDecipheriv('aes-256-gcm', key, iv); cipher.setAuthTag(tag);
+  return JSON.parse(Buffer.concat([cipher.update(Buffer.from(value.data, 'base64url')), cipher.final()]).toString('utf8'));
 }

@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import { deriveKey, proof, sessionKey } from '../src/crypto.js';
+const pin = '123456', salt = Buffer.alloc(16, 1).toString('base64url'), nonce = Buffer.alloc(32, 2).toString('base64url'), deviceId = 'android-test-device';
+const key = deriveKey(pin, salt), session = sessionKey(key, nonce);
+const iv = Buffer.alloc(12, 3);
+const plaintext = JSON.stringify({ seq: 0, body: { type: 'ping' } });
+const cipher = crypto.createCipheriv('aes-256-gcm', session, iv);
+const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+fs.writeFileSync(new URL('../docs/crypto-vector.json', import.meta.url), JSON.stringify({ warning: 'TEST VALUES ONLY. Never reuse deterministic IVs in real sessions.', pin, salt, nonce, deviceId, derivedKeyHex: key.toString('hex'), clientProof: proof(key, nonce + ':' + deviceId), hubProof: proof(key, 'hub:' + nonce), sessionKeyHex: session.toString('hex'), plaintext, envelope: { iv: iv.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), data: data.toString('base64url') } }, null, 2) + '\n');

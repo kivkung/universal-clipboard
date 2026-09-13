@@ -1,0 +1,29 @@
+name: Desktop demo checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Native Windows clipboard
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/clipboard-smoke.ps1
+      - name: Native Linux clipboard on isolated X11 display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          xvfb-run -a node scripts/clipboard-smoke.mjs
+      - run: npm pack --dry-run
