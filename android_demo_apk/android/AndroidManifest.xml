@@ -1,0 +1,19 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.kivkung.universalclipboard" android:versionCode="2" android:versionName="0.3.1-demo">
+  <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <application android:label="Universal Clipboard" android:icon="@drawable/ic_clipboard" android:theme="@style/AppTheme" android:allowBackup="false" android:supportsRtl="true" android:usesCleartextTraffic="false">
+    <activity android:name=".MainActivity" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+    </activity>
+    <activity android:name=".SendActivity" android:exported="false" android:theme="@style/SendTheme" android:excludeFromRecents="true" android:taskAffinity="com.kivkung.universalclipboard.send" />
+    <service android:name=".ClipboardService" android:exported="false" android:foregroundServiceType="connectedDevice" />
+    <receiver android:name=".StopReceiver" android:exported="false" />
+    <provider android:name=".ImageProvider" android:authorities="com.kivkung.universalclipboard.images" android:exported="false" android:grantUriPermissions="true" />
+  </application>
+</manifest>
