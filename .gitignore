@@ -4,3 +4,5 @@ data/*.json
 .DS_Store
 .test-*/
 *.tgz
+android/build/
+android/*.jks

@@ -24,6 +24,8 @@ Use the source IP of the datagram. Always allow manual IP. Discovery is unauthen
 
 ## Pairing and encryption
 
+0.4 extension: a Host-local `uc qr` creates a two-minute invitation URI (`uvc://join?v=1&host=...&port=...&hubId=...&id=...&secret=...&expires=...`). `id` is 16 random bytes in hex; `secret` is 32 random bytes in hex. QR contains no group PIN. On first authentication derive K from the secret string using the same scrypt/salt below and include `inviteId` in `auth`. Host validates expiry, proof, and identity, consumes the invitation, and persists K for that device ID. Client persists secret securely and stops including inviteId after auth.ok. Established IDs authenticate with their individual K, never fall back to group PIN. A retry by that same ID/K can recover a lost auth.ok even if its invitation has been consumed; other IDs cannot reuse it. Invitation state is ephemeral and cleared on Host restart; established credentials persist with Host state. All framing/session/encryption remains UCP/2. This does not add end-to-end encryption or change the existing manual-PIN limitations.
+
 Hub sends:
 ```json
 {"type":"challenge","protocol":"ucp/2","nonce":"...","salt":"...","hubId":"..."}

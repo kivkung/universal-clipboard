@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import { MAX_IMAGE_SIZE } from './config.js';
 import { hashText } from './protocol.js';
 import { PNG } from 'pngjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 let native;
 let imageWriter;
 async function backend() { return native ??= await import('@crosscopy/clipboard'); }
@@ -23,6 +25,11 @@ async function retryClipboard(action) {
 export function readClipboard() { return retryClipboard(readOnce); }
 async function readOnce() {
   const cb = await backend();
+  if (cb.hasFiles()) {
+    const files = (await cb.getFiles()).map(file => file.startsWith('file:') ? fileURLToPath(file) : file);
+    if (!files.length || files.length > 64 || files.some(file => !path.isAbsolute(file))) throw new Error('Clipboard must contain 1–64 local files');
+    return { kind: 'files', files, hash: hashText(JSON.stringify(files)) };
+  }
   if (cb.hasImage()) {
     const bytes = Buffer.from(await cb.getImageBinary());
     if (bytes.length > MAX_IMAGE_SIZE) throw new Error('Clipboard image exceeds 32 MiB');

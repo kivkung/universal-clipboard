@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.kivkung.universalclipboard.test">
+  <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+  <application android:label="UVC Tests" android:debuggable="true" android:testOnly="true">
+    <activity android:name="com.kivkung.universalclipboard.PasteActivity" android:exported="true" />
+    <provider android:name="com.kivkung.universalclipboard.FixtureProvider" android:authorities="com.kivkung.universalclipboard.test.fixture" android:exported="true" android:grantUriPermissions="true" />
+  </application>
+  <instrumentation android:name="com.kivkung.universalclipboard.Smoke" android:targetPackage="com.kivkung.universalclipboard" android:label="UVC smoke tests" />
+</manifest>

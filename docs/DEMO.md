@@ -1,6 +1,6 @@
 # Demo acceptance checklist
 
-Use two physical machines: Windows x64 and Linux x64 glibc in an X11 session. Install the same 0.2.0 tgz, run `uc doctor`, then create/join a group with `uc setup`. Keep service terminals open and use another terminal for commands.
+Use two physical machines: Windows x64 and Linux x64 glibc in an X11 session. Install the same 0.4.0 tgz, run `uc doctor`, then create/join a group with `uc setup`. Keep service terminals open and use another terminal for commands. Android 0.4.0 can join by scanning the terminal QR from `uc qr`. Copy generic files on desktop and run `uc send-clipboard` to save them on recipients.
 
 1. Copy Thai/English text and a URL both ways; paste into an editor. Check no echo loop.
 2. Copy an actual screenshot/image both ways; paste into an image-capable application. Check dimensions and appearance.

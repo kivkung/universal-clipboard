@@ -13,9 +13,9 @@ import { atomicJson } from './state.js';
 import { localIPv4s } from './net.js';
 
 export class Client extends EventEmitter {
-  constructor({ host, port = TCP_PORT, pin, id, name, dir, receiveDir, clipboard, retryMs = 1000, requestTimeout = 15000 }) {
+  constructor({ host, port = TCP_PORT, pin, id, name, dir, receiveDir, clipboard, pairing, onPaired = () => {}, retryMs = 1000, requestTimeout = 15000 }) {
     super();
-    Object.assign(this, { host, port, pin, id, name, dir, clipboard, retryMs, requestTimeout });
+    Object.assign(this, { host, port, pin, id, name, dir, clipboard, pairing, onPaired, retryMs, requestTimeout });
     this.pending = new Map(); this.ready = false; this.stopped = false; this.paused = false;
     this.sending = new Map(); this.lastHash = null;
     this.jobsDir = path.join(dir, 'outgoing'); fs.mkdirSync(this.jobsDir, { recursive: true, mode: 0o700 });
@@ -41,9 +41,11 @@ export class Client extends EventEmitter {
       readFrames(socket, async msg => {
         if (msg.type === 'challenge') {
           if (msg.protocol !== PROTOCOL || typeof msg.salt !== 'string' || typeof msg.nonce !== 'string' || msg.nonce.length > 128) throw new Error('Unsupported Hub protocol');
-          nonce = msg.nonce; key = deriveKey(this.pin, msg.salt);
+          if (this.pairing && msg.hubId !== this.pairing.hubId) throw new Error('Invitation belongs to another Host');
+          nonce = msg.nonce; key = deriveKey(this.pairing?.secret || this.pin, msg.salt);
           this.key = sessionKey(key, nonce); this.sendSeq = 0; this.recvSeq = 0;
-          await writeFrame(socket, { type: 'auth', protocol: PROTOCOL, deviceId: this.id, name: this.name, proof: proof(key, nonce + ':' + this.id) });
+          // A used invitation may have lost auth.ok: the same ID/secret first attempts its persisted credential.
+          await writeFrame(socket, { type: 'auth', protocol: PROTOCOL, deviceId: this.id, name: this.name, ...(this.pairing?.id ? { inviteId: this.pairing.id } : {}), proof: proof(key, nonce + ':' + this.id) });
           return;
         }
         if (msg.type === 'error') {
@@ -52,6 +54,7 @@ export class Client extends EventEmitter {
         if (msg.type === 'auth.ok') {
           if (!key || !equalProof(msg.proof, proof(key, 'hub:' + nonce))) throw new Error('Hub authentication failed');
           clearTimeout(timer); this.ready = true; this.fatal = null;
+          if (this.pairing?.id) { delete this.pairing.id; this.onPaired(this.pairing); }
           this.heartbeat = setInterval(() => this.send({ type: 'ping' }).catch(() => socket.destroy()), 10000);
           resolve(); this.emit('connected'); return;
         }

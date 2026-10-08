@@ -1,15 +1,15 @@
-# Universal Clipboard LAN — Demo 0.2.0
+# Universal Clipboard LAN — Demo 0.4.0
 
 ซิงก์ข้อความ/รูปจาก clipboard และส่งไฟล์ระหว่าง Windows กับ Linux ใน LAN
 เครื่องหนึ่งเป็น Hub และใช้ clipboard/ส่งไฟล์ได้เหมือนเครื่องอื่น
-Android APK จะทำภายหลัง โดยใช้ [โปรโตคอล](docs/PROTOCOL.md) เดียวกัน
+Android APK พร้อมซอร์สอยู่ใน `android/` ใช้ [โปรโตคอล](docs/PROTOCOL.md) เดียวกัน รุ่นนี้เพิ่ม QR จับคู่และส่งไฟล์ทั่วไป ดู [คู่มือฟีเจอร์ 1–3](docs/PHASE-1-3.md)
 
 ## ติดตั้งง่าย
 
-ติดตั้ง Node.js 22 ขึ้นไป แล้วรับไฟล์ `universal-clipboard-lan-0.2.0.tgz` จากผู้ดูแล:
+ติดตั้ง Node.js 22 ขึ้นไป แล้วรับไฟล์ `universal-clipboard-lan-0.4.0.tgz` จากผู้ดูแล:
 
 ```sh
-npm install -g ./universal-clipboard-lan-0.2.0.tgz
+npm install -g ./universal-clipboard-lan-0.4.0.tgz
 uc setup
 ```
 
@@ -68,6 +68,9 @@ Hub ใช้ TCP 3000 และ UDP 3001 สำหรับค้นหา ถ�
 
 ```sh
 uc devices
+uc qr
+uc qr --address 192.168.1.10
+uc send-clipboard --to DEVICE_ID
 uc send-file "./report.pdf" "./photo.png"
 uc send-file "./video.mp4" --to DEVICE_ID
 uc push "สวัสดี" --to DEVICE_ID
@@ -84,7 +87,7 @@ uc doctor
 ```
 
 `send-file` รูปจะบันทึกเป็นไฟล์ ส่วน Copy image จะบันทึกไฟล์และใส่รูปใน clipboard
-ไม่ได้ทำ Copy/Paste ไฟล์จาก Explorer/File Manager ข้ามเครื่อง หรือส่งโฟลเดอร์
+Copy ไฟล์ใน Explorer/File Manager แล้วรัน `uc send-clipboard` เพื่อส่งไฟล์ที่เลือก (1–64 ไฟล์) ไฟล์บันทึกในโฟลเดอร์รับ ไม่เปลี่ยน clipboard ผู้รับ และยังไม่รองรับโฟลเดอร์/การ Ctrl+V วางไฟล์ข้ามเครื่องโดยตรง
 Pause หยุดรับ/ส่ง clipboard; ไฟล์ยังรับได้ รูปที่ส่งมาจะบันทึกโดยไม่เปลี่ยน clipboard
 ผลส่งแยกตามไฟล์/ผู้รับ; ถ้ามีข้อผิดพลาดคำสั่งออกด้วยรหัส 1
 `clipboardError` หมายถึงบันทึกไฟล์สำเร็จแต่ใส่ clipboard ไม่สำเร็จ
@@ -111,7 +114,7 @@ Cancel ใช้กับงานที่ไม่ได้กำลังส�
 | Wayland + XWayland | ใช้ DISPLAY ของ XWayland; ต้องตรวจการวางรูปกับแอปที่ใช้จริง |
 | Pure Wayland ไม่มี XWayland | ยังไม่รองรับ; doctor แนะนำ session X11 |
 | Linux ARM/musl | reader ที่เลือกไม่มี binary ในแพ็กเกจนี้; ไม่อยู่ในขอบเขตเดโม |
-| Android | ยังไม่มี APK; พัฒนาตาม docs/PROTOCOL.md โดยไม่ต้องใช้ Node บนโทรศัพท์ |
+| Android 10+ | APK 0.4.0: Scan QR หรือ IP/PIN, SEND/STOP, ส่งข้อความ/รูป/ไฟล์จาก content URI ไป Host และรับข้อความ/รูปจาก Host; ไม่ต้องมี Node |
 
 `uc doctor` ตรวจโหลด backend/เข้าถึง desktop ไม่ได้พิสูจน์ว่าแอปทุกตัววางรูปได้
 ยังไม่ได้เดโม Windows ↔ Linux สองเครื่องจริง หรือรัน GitHub Actions ของรุ่นนี้
@@ -127,7 +130,15 @@ Cancel ใช้กับงานที่ไม่ได้กำลังส�
 - Hub เป็นตัวกลางที่เชื่อถือได้ สามารถอ่านข้อความ/ไฟล์ระหว่าง relay
 - PIN ไม่ส่งตรงบนสาย แต่ PIN 6 หลักยังถูกลองเดา offline จากข้อมูลที่ดักฟังได้ เหมาะกับ LAN เดโม
 - Revoke บล็อก ID ที่ระบุ ผู้ที่รู้ PIN ยังเข้าด้วย ID ใหม่ได้
-- ยังไม่มี cloud, Internet relay, history, GUI, บริการเริ่มตอนบูต หรือ Android APK
+- ยังไม่มี cloud, Internet relay, history หรือบริการเริ่มตอนบูต; desktop เป็น CLI และ Android มี UI
+
+## QR และไฟล์จาก clipboard
+
+เปิด Host ตามเดิม แล้วอีก terminal รัน `uc qr` ให้ Android กด **Scan QR** สแกนจาก terminal (หรือเลือกภาพ QR) ชื่อมือถือใช้ค่าที่บันทึกไว้ รหัสเชิญหมดอายุใน 2 นาที ใช้กับอุปกรณ์ใหม่ได้ครั้งเดียว และไม่ฝัง PIN ถาวร จับคู่แล้วใช้สิทธิ์เฉพาะเครื่องเพื่อ reconnect ได้ คำสั่ง `uc qr --address <IP>` ใช้เลือก interface เมื่อมีหลาย IP
+
+Windows/Linux: Copy ไฟล์ แล้วรัน `uc send-clipboard` หรือ `uc send-clipboard --to <ID>` ส่งโดยตั้งใจ ไม่ส่งไฟล์จาก watcher อัตโนมัติ Android: ถ้าแอปต้นทาง Copy ไฟล์เป็น content URI ที่อ่านได้ ให้กด SEND; สำเนาไฟล์เก็บในมือถือเพื่อ resume ได้ รับไฟล์ทั่วไปบน Host เป็นไฟล์ ไม่ใส่ clipboard มือถือส่งครั้งละหนึ่งไฟล์ สูงสุด 256 MiB และขึ้นกับพื้นที่ว่าง
+
+APK ที่สร้างใหม่อาจใช้ signing key ต่างจากรุ่นที่ติดตั้งอยู่ ห้ามถอนแอปบนมือถือโดยไม่สำรองการตั้งค่า/งานค้าง ถ้าต้องการอัปเดตทับ ให้ผู้ดูแลเซ็นด้วย key เดิมที่เก็บไว้เอง
 
 ## ที่เก็บข้อมูล
 

@@ -7,6 +7,8 @@ import { dataDirectory, deviceId, loadState, saveState } from './state.js';
 import { discover } from './client.js';
 import { startService, control } from './service.js';
 import { clipboardDoctor, readClipboard } from './clipboard.js';
+import { inviteUri, parseInvite } from './pairing.js';
+import QRCode from 'qrcode';
 
 const usage = [
 'Universal Clipboard LAN',
@@ -18,6 +20,9 @@ const usage = [
 '  uc doctor                      Check native clipboard support',
 '  uc status                      Show status (never prints PIN)',
 '  uc devices                     List connected recipients',
+'  uc qr [--address IP]            One-use Android/Desktop invite (2 minutes)',
+'  uc join "uvc://join?..."         Join using an invitation',
+'  uc send-clipboard [--to ID]     Send copied files explicitly',
 '  uc push [text] [--to ID]        Send text (clipboard if omitted)',
 '  uc send-file <paths...> [--to ID|all]',
 '  uc transfers                   Show unfinished outgoing transfers',
@@ -31,7 +36,7 @@ const usage = [
 'Node.js 22+; keep the start/host/join terminal open.'
 ].join('\n');
 async function main() {
-  const { positionals, values } = parseArgs({ allowPositionals: true, options: { to: { type: 'string' }, port: { type: 'string', default: '3000' }, 'data-dir': { type: 'string' }, help: { type: 'boolean' } } });
+  const { positionals, values } = parseArgs({ allowPositionals: true, options: { to: { type: 'string' }, address: { type: 'string' }, port: { type: 'string', default: '3000' }, 'data-dir': { type: 'string' }, help: { type: 'boolean' } } });
   if (values['data-dir']) process.env.UC_DATA_DIR = path.resolve(values['data-dir']);
   let [cmd, ...args] = positionals;
   if (values.help || cmd === 'help') { console.log(usage); return; }
@@ -65,16 +70,20 @@ async function main() {
           const selected = hubs[Number(answer) - 1];
           const pin = (await rl.question('6-digit PIN shown on the Hub: ')).trim();
           if (!/^\d{6}$/.test(pin)) throw new Error('PIN must contain 6 digits');
-          state.role = 'client'; state.hub = { host: selected?.address || answer, port: selected?.port || port }; state.pin = pin;
+          state.role = 'client'; state.hub = { host: selected?.address || answer, port: selected?.port || port }; state.pin = pin; delete state.pairing;
         }
       } finally { rl.close(); }
     } else if (cmd === 'host') { state.role = 'hub'; state.port = port; }
     else {
       const [host, second, third] = args;
+      if (host?.startsWith('uvc:')) {
+        const invite = parseInvite(host); state.role = 'client'; state.hub = { host: invite.host, port: invite.port }; state.pairing = { id: invite.id, secret: invite.secret, hubId: invite.hubId }; delete state.pin;
+      } else {
       const pin = third || second;
       const actualPort = third ? Number(second) : port;
       if (!host || !/^\d{6}$/.test(pin || '') || !Number.isInteger(actualPort) || actualPort < 1 || actualPort > 65535) throw new Error('Use uc join <ip> <6-digit-pin> [--port 3000]');
-      state.role = 'client'; state.hub = { host, port: actualPort }; state.pin = pin;
+      state.role = 'client'; state.hub = { host, port: actualPort }; state.pin = pin; delete state.pairing;
+      }
     }
     saveState(state, dir); cmd = 'start';
   }
@@ -89,6 +98,14 @@ async function main() {
     return;
   }
   let result;
+  if (cmd === 'qr') {
+    const invite = await control('qr', [values.address]);
+    console.log('Scan in the Android app → Scan QR. Valid for 2 minutes / one device.');
+    console.log('Host: ' + invite.host + ':' + invite.port);
+    console.log(await QRCode.toString(inviteUri(invite), { type: 'terminal', small: true, errorCorrectionLevel: 'M' }));
+    console.log('Treat this QR as a private invitation. Generate a new one if expired.');
+    return;
+  }
   if (cmd === 'push') {
     const text = args.length ? args.join(' ') : (await readClipboard())?.text;
     if (typeof text !== 'string') throw new Error('Clipboard does not contain text');
@@ -96,6 +113,8 @@ async function main() {
   } else if (cmd === 'send-file') {
     if (!args.length) throw new Error('Specify one or more file paths');
     result = await control(cmd, [args.map(x => path.resolve(x)), values.to]);
+  } else if (cmd === 'send-clipboard') {
+    result = await control(cmd, [values.to]);
   } else if (['devices', 'transfers', 'resume', 'pause', 'unpause', 'revoke', 'rename', 'receive-dir', 'cancel'].includes(cmd)) {
     if (['revoke', 'rename', 'receive-dir', 'cancel'].includes(cmd) && !args.length) throw new Error('Missing argument');
     if (cmd === 'receive-dir') args[0] = path.resolve(args[0]);

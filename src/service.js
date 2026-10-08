@@ -53,7 +53,7 @@ export async function startService({ dir = dataDirectory(), clipboard = { read: 
       log('Hub: ' + localIPv4s().map(x => x.address + ':' + hub.port).join(', '));
       log('Pairing PIN: ' + state.pin);
     }
-    endpoint = new Client({ host: hub ? '127.0.0.1' : state.hub.host, port: hub ? hub.port : state.hub.port, pin: state.pin, id, name: state.name, dir, receiveDir: state.receiveDir, clipboard });
+    endpoint = new Client({ host: hub ? '127.0.0.1' : state.hub.host, port: hub ? hub.port : state.hub.port, pin: state.pin, pairing: hub ? undefined : state.pairing, onPaired: pairing => { state.pairing = pairing; save(state); }, id, name: state.name, dir, receiveDir: state.receiveDir, clipboard });
     endpoint.paused = !!state.paused;
     endpoint.on('connected', () => log('Connected. Clipboard sync ' + (endpoint.paused ? 'paused.' : 'ready.')));
     endpoint.on('disconnected', () => { if (!closing) log('Disconnected; reconnecting automatically unless access was rejected.'); });
@@ -67,6 +67,22 @@ export async function startService({ dir = dataDirectory(), clipboard = { read: 
       switch (name) {
         case 'status': return { id, name: state.name, role: state.role, connected: endpoint.ready, paused: endpoint.paused, receiveDir: state.receiveDir, pendingTransfers: endpoint.jobs().length };
         case 'devices': return await endpoint.devices();
+        case 'qr': {
+          if (!hub) throw new Error('Run uc qr on the Host');
+          const addresses = localIPv4s().map(x => x.address);
+          const address = args[0] || addresses[0];
+          if (!addresses.includes(address)) throw new Error('Choose an IPv4 address belonging to this Host');
+          return hub.createInvitation(address);
+        }
+        case 'send-clipboard': {
+          const item = await clipboard.read();
+          if (item?.kind !== 'files') throw new Error('Copy files in Explorer/File Manager first, then run uc send-clipboard');
+          if (!item.files.length || item.files.length > 64) throw new Error('Select 1–64 files');
+          for (const file of item.files) if (!(await fs.promises.stat(file)).isFile()) throw new Error('Folders are not supported: ' + file);
+          const results = [];
+          for (const file of item.files) results.push({ file, results: await endpoint.sendFile(file, args[0]) });
+          return results;
+        }
         case 'push': return await endpoint.push(args[0], args[1]);
         case 'send-file': {
           const [files, to] = args; const results = [];
@@ -113,6 +129,8 @@ export async function startService({ dir = dataDirectory(), clipboard = { read: 
       try {
         const item = await clipboard.read();
         if (!item || item.hash === endpoint.lastHash || endpoint.applying) return;
+        // File selections are sent only by an explicit command, never by the watcher.
+        if (item.kind === 'files') return;
         if (item.kind === 'text') await endpoint.push(item.text);
         else {
           const imageDir = path.join(dir, 'images'); fs.mkdirSync(imageDir, { recursive: true });

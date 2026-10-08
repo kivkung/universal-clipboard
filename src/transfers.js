@@ -26,9 +26,11 @@ export class TransferStore {
   }
   cleanup() {
     const cutoff = Date.now() - 7 * 86400_000;
-    for (const name of fs.readdirSync(this.dir)) {
-      const file = path.join(this.dir, name);
-      if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file);
+    // Treat metadata and partial as one job: activity on either file keeps both alive.
+    const keys = new Set(fs.readdirSync(this.dir).filter(n => /\.(json|part)$/.test(n)).map(n => n.replace(/\.(json|part)$/, '')));
+    for (const key of keys) {
+      const files = ['.json', '.part'].map(ext => path.join(this.dir, key + ext)).filter(file => fs.existsSync(file));
+      if (files.every(file => fs.statSync(file).mtimeMs < cutoff)) for (const file of files) fs.unlinkSync(file);
     }
   }
   paths(id, sender) {
@@ -82,6 +84,7 @@ export class TransferStore {
       if (message.offset !== offset || message.sequence !== offset / CHUNK_SIZE || data.length !== Math.min(CHUNK_SIZE, state.size - offset) || !data.length) throw new Error('Invalid chunk offset, sequence or size');
       const file = await fsp.open(p.part, 'a');
       try { await file.writeFile(data); await file.sync(); } finally { await file.close(); }
+      state.updated = Date.now(); atomicJson(p.meta, state);
       return { offset: offset + data.length };
     }
     if (message.type !== 'file.finish') throw new Error('Unknown transfer message');
