@@ -14,7 +14,7 @@ const usage = [
 'Universal Clipboard LAN',
 '  uc setup                       Guided first-time setup',
 '  uc start                       Start sync using saved settings',
-'  uc host [--port 3000]           Create a Hub and start sync',
+'  uc host [--port 3000]           Create a Hub, start sync and show pairing QR',
 '  uc join <ip> <pin> [--port 3000] Pair and start sync',
 '  uc discover                    Find Hubs on this LAN',
 '  uc doctor                      Check native clipboard support',
@@ -35,6 +35,12 @@ const usage = [
 '  --data-dir <path>              Separate profile (testing/portable use)',
 'Node.js 22+; keep the start/host/join terminal open.'
 ].join('\n');
+async function showPairingQr(invite) {
+  console.log('Scan in the Android app → Scan QR. Valid for 2 minutes / one device.');
+  console.log('Host: ' + invite.host + ':' + invite.port);
+  console.log(await QRCode.toString(inviteUri(invite), { type: 'terminal', small: true, errorCorrectionLevel: 'M' }));
+  console.log('Treat this QR as a private invitation. Run uc qr to generate a new one if expired.');
+}
 async function main() {
   const { positionals, values } = parseArgs({ allowPositionals: true, options: { to: { type: 'string' }, address: { type: 'string' }, port: { type: 'string', default: '3000' }, 'data-dir': { type: 'string' }, help: { type: 'boolean' } } });
   if (values['data-dir']) process.env.UC_DATA_DIR = path.resolve(values['data-dir']);
@@ -90,7 +96,12 @@ async function main() {
   if (cmd === 'start' || cmd === 'watch') {
     const service = await startService({ dir });
     const stop = async () => { await service.close(); process.exit(0); };
-    process.once('SIGINT', stop); process.once('SIGTERM', stop); return;
+    process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    if (service.hub) {
+      try { await showPairingQr(await service.command('qr', [values.address])); }
+      catch (error) { console.error('Pairing QR unavailable: ' + error.message + '. Run uc qr --address <Host LAN IP> when ready.'); }
+    }
+    return;
   }
   if (cmd === 'status') {
     try { console.log(JSON.stringify(await control('status'), null, 2)); }
@@ -100,10 +111,7 @@ async function main() {
   let result;
   if (cmd === 'qr') {
     const invite = await control('qr', [values.address]);
-    console.log('Scan in the Android app → Scan QR. Valid for 2 minutes / one device.');
-    console.log('Host: ' + invite.host + ':' + invite.port);
-    console.log(await QRCode.toString(inviteUri(invite), { type: 'terminal', small: true, errorCorrectionLevel: 'M' }));
-    console.log('Treat this QR as a private invitation. Generate a new one if expired.');
+    await showPairingQr(invite);
     return;
   }
   if (cmd === 'push') {

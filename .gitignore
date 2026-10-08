@@ -6,3 +6,4 @@ data/*.json
 *.tgz
 android/build/
 android/*.jks
+build

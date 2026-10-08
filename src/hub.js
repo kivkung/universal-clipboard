@@ -59,19 +59,21 @@ export class Hub extends EventEmitter {
         if (msg.type !== 'auth' || msg.protocol !== PROTOCOL) return failAuth('PROTOCOL_MISMATCH');
         if (typeof msg.deviceId !== 'string' || !/^[a-zA-Z0-9-]{8,64}$/.test(msg.deviceId) || typeof msg.name !== 'string' || msg.name.length > 80) return failAuth('BAD_IDENTITY');
         if (this.state.revokedDevices.includes(msg.deviceId)) return failAuth('DEVICE_REVOKED');
-        const invitation = msg.inviteId ? this.invitations.get(msg.inviteId) : null;
+        const candidate = msg.inviteId ? this.invitations.get(msg.inviteId) : null;
+        const invitation = candidate && candidate.expires > Date.now() ? candidate : null;
         const savedKey = this.state.peers[msg.deviceId]?.authKey;
         // Retry by the already-paired ID/secret is safe when auth.ok was lost.
         if (msg.inviteId && (!invitation || invitation.expires <= Date.now()) && !savedKey) return failAuth('INVITE_EXPIRED_OR_USED');
-        if (invitation && invitation.expires <= Date.now() && !savedKey) return failAuth('INVITE_EXPIRED_OR_USED');
-        const authKey = savedKey ? Buffer.from(savedKey, 'base64url') : invitation ? deriveKey(invitation.secret, this.state.salt) : this.key;
+        // A fresh valid invitation explicitly re-pairs this device. Completed
+        // invitation retries still use its persisted key after the invite is gone.
+        const authKey = invitation ? deriveKey(invitation.secret, this.state.salt) : savedKey ? Buffer.from(savedKey, 'base64url') : this.key;
         if (!equalProof(msg.proof, proof(authKey, nonce + ':' + msg.deviceId))) return failAuth('BAD_PIN');
         // A second terminal must use local control rather than replacing the live receiver.
         if (this.sessions.has(msg.deviceId)) return failAuth('DEVICE_ALREADY_CONNECTED');
         peer = { id: msg.deviceId, name: msg.name, socket, key: sessionKey(authKey, nonce), sendSeq: 0, recvSeq: 0 };
         this.sessions.set(peer.id, peer); clearTimeout(timer);
         this.state.peers[peer.id] = { id: peer.id, name: peer.name, lastSeen: Date.now(), ...((invitation || savedKey) ? { authKey: authKey.toString('base64url') } : {}) }; this.save(this.state);
-        if (invitation && !savedKey) this.invitations.delete(msg.inviteId);
+        if (invitation) this.invitations.delete(msg.inviteId);
         await writeFrame(socket, { type: 'auth.ok', proof: proof(authKey, 'hub:' + nonce) });
         return;
       }

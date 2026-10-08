@@ -18,9 +18,11 @@ public final class MainActivity extends Activity {
     private TextView state;
     private Button join,send;
     private Config saved;
+    private Invitation pendingInvite;
+    private LinearLayout extra;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final Runnable refresh=new Runnable(){public void run(){
-        state.setText(ClipboardService.status);
+        if(pendingInvite==null)state.setText(ClipboardService.status);
         send.setEnabled(ClipboardService.current!=null&&!ClipboardService.busy);
         join.setEnabled(!ClipboardService.busy);
         handler.postDelayed(this,500);
@@ -51,9 +53,9 @@ public final class MainActivity extends Activity {
         pin=field(box,"PIN ของ Host","ตัวเลข 6 หลัก",InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_VARIATION_PASSWORD);
         name=field(box,"Device name · ชื่อมือถือ","Nothing Phone",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_CAP_WORDS);
         TextView advanced=text("ตั้งค่าเพิ่มเติม ▾",14,Color.rgb(8,127,120));box.addView(advanced);gap(box,8);
-        LinearLayout extra=new LinearLayout(this);extra.setOrientation(LinearLayout.VERTICAL);box.addView(extra);port=field(extra,"Port","3000",InputType.TYPE_CLASS_NUMBER);extra.setVisibility(View.GONE);
+        extra=new LinearLayout(this);extra.setOrientation(LinearLayout.VERTICAL);box.addView(extra);port=field(extra,"Port","3000",InputType.TYPE_CLASS_NUMBER);extra.setVisibility(View.GONE);
         advanced.setOnClickListener(v->extra.setVisibility(extra.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE));
-        join=button(box,"Join Host",true);join.setOnClickListener(v->join());
+        join=button(box,"เชื่อมต่อ · Join Host",true);join.setId(android.R.id.button1);join.setOnClickListener(v->join());
         state=text(ClipboardService.status,14,Color.rgb(8,100,95));box.addView(state);gap(box,20);
         send=button(box,"SEND · ส่ง clipboard",false);send.setOnClickListener(v->startActivity(new Intent(this,SendActivity.class)));
         Button stop=button(box,"STOP · ปิดแอป",false);stop.setOnClickListener(v->sendBroadcast(new Intent(this,StopReceiver.class)));
@@ -66,10 +68,13 @@ public final class MainActivity extends Activity {
         catch(Exception e){state.setText("อ่านค่าที่บันทึกไม่ได้ กรุณากรอกใหม่");name.setText(Build.MODEL);port.setText("3000");}
     }
     private void join(){
+        Config credentials=saved;
+        if(pendingInvite==null){try{credentials=Config.load(this);}catch(Exception e){state.setText("อ่านการตั้งค่าไม่ได้: "+e.getMessage());return;}}
         String host=ip.getText().toString().trim(),code=pin.getText().toString().trim(),label=name.getText().toString().trim();
         if(!host.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")){ip.setError("กรอก IPv4 ที่แสดงบน Host เช่น 192.168.1.10");return;}
         for(String part:host.split("\\."))if(Integer.parseInt(part)>255){ip.setError("IP ไม่ถูกต้อง");return;}
-        boolean qr=saved!=null&&saved.pin.matches("[a-f0-9]{64}")&&saved.host.equals(host)&&String.valueOf(saved.port).equals(port.getText().toString().trim())&&code.isEmpty();
+        boolean qr=credentials!=null&&credentials.pin.matches("[a-f0-9]{64}")&&credentials.host.equals(host)&&String.valueOf(credentials.port).equals(port.getText().toString().trim())&&code.isEmpty();
+        if(qr&&pendingInvite!=null&&pendingInvite.expires<=System.currentTimeMillis()){state.setText("QR หมดอายุ กรุณารัน uc qr แล้วสแกนใหม่ก่อนเชื่อมต่อ");return;}
         if(!qr&&!code.matches("[0-9]{6}")){pin.setError("PIN ต้องเป็นตัวเลข 6 หลัก หรือสแกน QR");return;}
         if(label.isEmpty()||label.length()>80){name.setError("ชื่อ 1–80 ตัวอักษร");return;}
         int number;try{number=Integer.parseInt(port.getText().toString());if(number<1||number>65535)throw new Exception();}catch(Exception e){port.setError("Port ต้องอยู่ระหว่าง 1–65535");port.getParent();return;}
@@ -77,11 +82,11 @@ public final class MainActivity extends Activity {
         if(!getSystemService(NotificationManager.class).areNotificationsEnabled()){
             new AlertDialog.Builder(this).setMessage("เปิดการแจ้งเตือนเพื่อใช้ปุ่ม SEND / STOP").setPositiveButton("เปิดตั้งค่า",(d,w)->startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,getPackageName()))).setNegativeButton("ยกเลิก",null).show();return;
         }
-        try{String id=saved==null?Config.load(this).id:saved.id;Config cfg=new Config(host,number,qr?saved.pin:code,label,id);if(qr){cfg.inviteId=saved.inviteId;cfg.hubId=saved.hubId;}cfg.save(this);saved=cfg;startForegroundService(ClipboardService.action(this,ClipboardService.JOIN));state.setText("กำลังเชื่อมต่อ…");}
+        try{String id=credentials==null?Config.load(this).id:credentials.id;Config cfg=new Config(host,number,qr?credentials.pin:code,label,id);if(qr){cfg.inviteId=credentials.inviteId;cfg.hubId=credentials.hubId;}cfg.save(this);saved=cfg;startForegroundService(ClipboardService.action(this,ClipboardService.JOIN));pendingInvite=null;state.setText("กำลังเชื่อมต่อ…");}
         catch(Exception e){new AlertDialog.Builder(this).setMessage(e.getMessage()).setPositiveButton("ตกลง",null).show();}
     }
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);if(request==7&&results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)join();else Toast.makeText(this,"ต้องอนุญาต notification เพื่อใช้ปุ่ม SEND / STOP",Toast.LENGTH_LONG).show();}
-    @Override public void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==20&&result==RESULT_OK&&data!=null){try{Invitation i=Invitation.parse(data.getStringExtra("invite"));String label=name.getText().toString().trim();if(label.isEmpty())label=Build.MODEL;Config cfg=new Config(i.host,i.port,i.secret,label,Config.load(this).id);cfg.inviteId=i.id;cfg.hubId=i.hubId;saved=cfg;ip.setText(i.host);port.setText(String.valueOf(i.port));pin.setText("");pin.setHint("จับคู่ด้วย QR แล้ว");join();}catch(Exception e){state.setText(e.getMessage());}}}
+    @Override public void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==20&&result==RESULT_OK&&data!=null){try{Invitation i=Invitation.parse(data.getStringExtra("invite"));String label=name.getText().toString().trim();if(label.isEmpty())label=Build.MODEL;Config cfg=new Config(i.host,i.port,i.secret,label,Config.load(this).id);cfg.inviteId=i.id;cfg.hubId=i.hubId;saved=cfg;pendingInvite=i;ip.setText(i.host);port.setText(String.valueOf(i.port));name.setText(label);pin.setText("");pin.setHint("ใช้คำเชิญ QR · ไม่ต้องกรอก PIN");extra.setVisibility(View.VISIBLE);state.setText("อ่าน QR แล้ว ตรวจข้อมูลและกดเชื่อมต่อ · Join Host");}catch(Exception e){state.setText(e.getMessage());}}}
     @Override public void onResume(){super.onResume();handler.post(refresh);}
     @Override public void onPause(){handler.removeCallbacks(refresh);super.onPause();}
 }

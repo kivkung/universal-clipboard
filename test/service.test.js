@@ -46,6 +46,7 @@ test('service controls live Hub, watches image/text, reconnects and rejects untr
   await control('unpause', [], aDir);
   const file = path.join(root, 'from-hub.bin'); fs.writeFileSync(file, crypto.randomBytes(100000));
   const [sent] = await control('send-file', [[file], b.endpoint.id], aDir);
+  assert.equal(sent.results[0].error, undefined, JSON.stringify(sent.results[0]));
   assert.equal(await fileHash(sent.results[0].path), await fileHash(file));
   const { port } = JSON.parse(fs.readFileSync(path.join(aDir, 'service.json')));
   const status = await new Promise((resolve, reject) => {

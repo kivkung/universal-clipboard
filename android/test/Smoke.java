@@ -56,6 +56,10 @@ public final class Smoke extends Instrumentation {
         check(activity.hasWindowFocus(),"test Activity focused before clipboard capture");
         final String qrInvitation=invitationText;
         runOnMainSync(()->activity.onActivityResult(20,Activity.RESULT_OK,new Intent().putExtra("invite",qrInvitation)));
+        Thread.sleep(800);
+        check(ClipboardService.current==null,"QR scan only fills fields without starting a connection");
+        check(Config.load(c).pin.equals("123456"),"QR scan does not replace saved settings before confirmation");
+        runOnMainSync(()->activity.findViewById(android.R.id.button1).performClick());
         waitStatus("พร้อมส่ง",15000);
         cfg=Config.load(c);check(cfg.pin.matches("[a-f0-9]{64}")&&cfg.inviteId.isEmpty(),"QR Join stores encrypted device credential and consumes invite");
         Thread.sleep(600);screenshot("settings.png");

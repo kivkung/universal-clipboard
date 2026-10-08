@@ -46,6 +46,28 @@ test('one-use pairing persists individual credential, survives reconnect/restart
   await assert.rejects(make(first.id,{secret:invite.secret,hubId:state.deviceId}).connect(), /DEVICE_REVOKED/);
 });
 
+test('a paired device can scan a fresh invitation without changing identity or bypassing revocation', async t => {
+  const root=fs.mkdtempSync(path.resolve('.test-repairing-'));
+  const state={deviceId:'repair-host-device',name:'Host',pin:'123456'};
+  const hub=new Hub({state,port:0,bind:'127.0.0.1',discoveryPort:false});await hub.start();
+  const clients=[];
+  t.after(async()=>{for(const client of clients)await client.close();await hub.close();await sleep(100);fs.rmSync(root,{recursive:true,force:true});});
+  const make=(id,invite)=>{const dir=path.join(root,id);const client=new Client({host:'127.0.0.1',port:hub.port,id,name:id,dir,receiveDir:path.join(dir,'received'),pairing:{id:invite.id,secret:invite.secret,hubId:state.deviceId}});clients.push(client);return client;};
+  const firstInvite=hub.createInvitation('192.168.1.10');
+  const first=make('repeat-phone-device',firstInvite);await first.connect();await first.close();await sleep(100);
+  const oldKey=state.peers[first.id].authKey;
+  const freshInvite=hub.createInvitation('192.168.1.10');
+  const repaired=make(first.id,freshInvite);await repaired.connect();
+  assert.notEqual(state.peers[first.id].authKey,oldKey);
+  assert.equal(hub.invitations.has(freshInvite.id),false);
+  await repaired.close();await sleep(100);
+  await assert.rejects(make('different-phone-device',freshInvite).connect(),/INVITE_EXPIRED_OR_USED/);
+  await assert.rejects(make(first.id,firstInvite).connect(),/BAD_PIN/);
+  const retry=make(first.id,freshInvite);await retry.connect();
+  hub.revoke(first.id);await retry.close();await sleep(100);
+  await assert.rejects(make(first.id,hub.createInvitation('192.168.1.10')).connect(),/DEVICE_REVOKED/);
+});
+
 test('active old partial resumes after restart; expired metadata and partial are cleaned as a pair', async t => {
   const root=fs.mkdtempSync(path.resolve('.test-cleanup-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const options={dir:root,receiveDir:path.join(root,'received')};let store=new TransferStore(options);
@@ -74,7 +96,10 @@ test('copied generic files require explicit send, preserve binary bytes, reject 
   assert.deepEqual(fs.readdirSync(b.endpoint.store.receiveDir),[]);
   const results=await a.command('send-clipboard',[b.endpoint.id]);
   assert.equal(results.length,2);
-  for(const sent of results) assert.equal(await fileHash(sent.results[0].path),await fileHash(sent.file));
+  for(const sent of results) {
+    assert.equal(sent.results[0].error, undefined, JSON.stringify(sent.results[0]));
+    assert.equal(await fileHash(sent.results[0].path),await fileHash(sent.file));
+  }
   assert.equal(bWrites,0);assert.equal(clip.kind,'files');
   clip={kind:'files',files:[root],hash:'folder'};await assert.rejects(a.command('send-clipboard',[b.endpoint.id]),/Folders/);
   clip={kind:'text',text:'hello'};await assert.rejects(a.command('send-clipboard',[]),/Copy files/);
