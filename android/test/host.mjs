@@ -21,6 +21,8 @@ const dropped=new Set();const handle=host.store.handle.bind(host.store);
 host.store.handle=async(body,from)=>{const result=await handle(body,from);if(!dropped.has(body.transferId)&&from==='android-wire-test'&&body.type==='file.chunk'){dropped.add(body.transferId);record({event:'forced-disconnect',offset:result.offset});hub.sessions.get(from)?.socket.destroy();}return result;};
 console.log('TEST HOST READY 33030');
 const fixture=path.join(dir,'receive-fixture.png');
+const binaryFixture=path.join(dir,'interop.bin'),emptyFixture=path.join(dir,'empty.dat');
+fs.writeFileSync(binaryFixture,Buffer.from([0,1,2,255,0,19]));fs.writeFileSync(emptyFixture,Buffer.alloc(0));
 const png=new PNG({width:512,height:512});crypto.randomFillSync(png.data);fs.writeFileSync(fixture,PNG.sync.write(png));
 const ordinaryHandle=host.handle.bind(host);
 host.handle=async b=>{
@@ -37,6 +39,7 @@ host.handle=async b=>{
     }else if(b.mode==='bad-hash'){
       let rejected=false;try{await host.request({type:'clipboard.text',to:b.target,text:'bad',hash:'0'.repeat(64)});}catch{rejected=true;}result={rejected};
     }else if(b.mode==='image')result=await host.sendFile(fixture,b.target,'image');
+    else if(b.mode==='files')result=await host.sendFiles([binaryFixture,emptyFixture],b.target);
     else if(b.mode==='resume'){
       const bytes=fs.readFileSync(fixture),job={file:fixture,to:b.target,name:'receive-fixture.png',size:bytes.length,hash:crypto.createHash('sha256').update(bytes).digest('hex'),kind:'image',transferId:crypto.randomBytes(32).toString('hex')};
       await host.request({...job,file:undefined,type:'file.offer'});

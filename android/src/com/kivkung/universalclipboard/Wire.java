@@ -49,8 +49,9 @@ public final class Wire implements AutoCloseable {
     public void connect(String host,int port,String pin,String id,String name,String inviteId,String expectedHub) throws Exception {
         close(); Connection c=new Connection();connection=c;
         try {
+        if(host.startsWith("https:")||host.startsWith("wss:")){WebSocketTransport ws=new WebSocketTransport(host);c.socket=ws.socket;c.in=new DataInputStream(ws.input);c.out=new DataOutputStream(ws.output);}else{
         c.socket.connect(new InetSocketAddress(host,port),7000);c.socket.setSoTimeout(10000);c.socket.setKeepAlive(true);
-        c.in=new DataInputStream(c.socket.getInputStream());c.out=new DataOutputStream(c.socket.getOutputStream());
+        c.in=new DataInputStream(c.socket.getInputStream());c.out=new DataOutputStream(c.socket.getOutputStream());}
         JSONObject challenge=c.read();
         if(!"challenge".equals(challenge.optString("type"))||!"ucp/2".equals(challenge.optString("protocol")))throw new Rejected("Host ต้องเป็น Universal Clipboard 0.2 ขึ้นไป");
         String nonce=challenge.getString("nonce"),salt=challenge.getString("salt");
@@ -88,10 +89,10 @@ public final class Wire implements AutoCloseable {
     }
     private static final class Pending {final String from;final CompletableFuture<JSONObject> future=new CompletableFuture<>();Pending(String from){this.from=from;}}
     private final class Connection {
-        final Socket socket=new Socket();DataInputStream in;DataOutputStream out;byte[] key;String hub;long sendSeq,recvSeq;
+        Socket socket=new Socket();DataInputStream in;DataOutputStream out;byte[] key;String hub;long sendSeq,recvSeq;
         volatile boolean closed=false;volatile CompletableFuture<JSONObject> pong;
         final ConcurrentHashMap<String,Pending> pending=new ConcurrentHashMap<>();
-        void write(JSONObject o)throws Exception{byte[] b=utf(o.toString());if(b.length>2097152)throw new Rejected("Frame too large");out.writeInt(b.length);out.writeByte(1);out.write(b);out.flush();}
+        void write(JSONObject o)throws Exception{byte[] b=utf(o.toString());if(b.length>2097152)throw new Rejected("Frame too large");ByteArrayOutputStream frame=new ByteArrayOutputStream(b.length+5);DataOutputStream data=new DataOutputStream(frame);data.writeInt(b.length);data.writeByte(1);data.write(b);out.write(frame.toByteArray());out.flush();}
         JSONObject read()throws Exception{int n=in.readInt();int type=in.readUnsignedByte();if(n<1||n>2097152||type!=1)throw new Rejected("Invalid frame");byte[] b=new byte[n];in.readFully(b);return new JSONObject(new String(b,StandardCharsets.UTF_8));}
         synchronized void send(JSONObject body)throws Exception{if(closed)throw new IOException("Disconnected");write(obj("type","secure","envelope",encrypt(obj("seq",sendSeq++,"body",body),key)));}
         void loop(){try{while(!closed){

@@ -68,7 +68,7 @@ Reply:
 ```json
 {"replyTo":"...","from":"@hub","result":[{"id":"...","name":"...","online":true}]}
 ```
-Application requests require to=recipient ID. Hub overwrites from with authenticated sender ID. Recipient replies:
+Application requests require to=recipient ID. Hub overwrites from and fromName with authenticated sender ID/name. Recipient replies:
 ```json
 {"type":"reply","to":"SENDER_ID","replyTo":"...","result":{}}
 ```
@@ -79,7 +79,7 @@ Or error="message" instead of result. Only accept replies matching both request 
 ```json
 {"type":"clipboard.text","to":"...","requestId":"...","text":"...","hash":"..."}
 ```
-Hash is lowercase SHA-256 over UTF-8 text, max 512 KiB. Verify hash, suppress duplicates, apply unless paused. Reply applied:true/false. Remember applied content to prevent echo. Android clipboard permission/lifecycle/background access belongs in the APK layer.
+Hash is lowercase SHA-256 over UTF-8 text, max 512 KiB. Optional entryId is a stable 64-character lowercase hex receipt identity, namespaced by authenticated sender; legacy messages fall back to requestId. Verify hash, persist a received history entry, suppress replay, apply unless paused. Reply applied:true/false and historyId. Remember applied content to prevent echo. Android clipboard permission/lifecycle/background access belongs in the APK layer.
 
 ## Files and images
 
@@ -105,7 +105,41 @@ Check total size and full SHA-256, publish with exclusive filename, never overwr
 
 Cancellation uses type=file.cancel, to/requestId/transferId, returns cancelled:true. Deletes unfinished data/metadata but not completed output.
 
-## Persistence
+## File batches and received history extension
+
+UCP/2 framing and encryption are unchanged. A batch is scoped to authenticated
+sender + random 64-hex batchId and contains 1–64 generic regular files:
+
+```json
+{"type":"file.batch.offer","to":"...","batchId":"64 hex","count":2,"files":[{"transferId":"64 hex","name":"report.pdf","size":123,"hash":"64 hex","kind":"file","mime":"application/pdf"},{"transferId":"different 64 hex","name":"empty.dat","size":0,"hash":"SHA256 of empty bytes","kind":"file","mime":"application/octet-stream"}]}
+```
+
+Include requestId as with other requests. Transfer IDs must be unique in the
+manifest. Receiver validates the whole manifest and reserves storage before
+acceptance. Member file.offer adds batchId and zero-based index; every member's
+name/size/hash/kind/MIME must match its manifest position. Existing chunk/finish
+messages use the member transferId. Member completion validates/persists bytes
+but does not publish clipboard or add successful history yet.
+
+`file.batch.finish {batchId}` verifies all members and commits one durable history
+entry, then publishes the entire file-list clipboard. Reply includes complete:true,
+historyId and optional clipboardError. Persist that response; repeated batch
+offer/finish returns completion without another publication. A missing/invalid
+member causes an error, with no successful history append or eviction.
+
+`file.batch.cancel {batchId}` discards unfinished batch work. Desktop permanent
+receive-dir outputs are preserved, including completed members of a failed batch;
+Android uncommitted private batch payloads can be removed. Successful batch
+history is not cancelled. Standalone file.offer remains interoperable, optionally
+including MIME. Android limits each generic incoming member to 256 MiB; desktop
+keeps 10 GiB. Full batches are subject to each platform's available storage budget.
+
+Successful receipt history uses independent payload references and FIFO five-entry
+logical retention. Pins can delay physical deletion. See [HISTORY.md](HISTORY.md)
+for storage policies, recovery and export actions. Older receivers without this
+extension reject batch messages; update both endpoints for explicit file batches.
+
+## Transfer persistence
 
 Persist outgoing source path/URI, target, metadata, transferId. Android should persist content-URI permission for restart. Receiver persists partial and metadata; resume offset comes from actual bytes on disk. Discard an incomplete trailing chunk after interrupted writes. On reconnect, authenticate with new session key and re-offer same metadata. After sender restart verify source hash still matches. Desktop retries network errors up to 5 minutes, then keeps jobs for uc resume; partials expire after 7 days on startup.
 

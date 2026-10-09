@@ -1,103 +1,37 @@
 package com.kivkung.universalclipboard;
-
-import android.content.*;
-import android.graphics.*;
-import android.net.Uri;
-import android.util.AtomicFile;
-import java.io.*;
-import java.security.MessageDigest;
-import java.util.*;
-import org.json.JSONObject;
-
-/** Disk-backed image receiver. Never reads the current clipboard from the background. */
+import android.content.*;import android.graphics.*;import android.util.AtomicFile;import android.webkit.MimeTypeMap;import java.io.*;import java.security.*;import java.util.*;import org.json.*;
+/** Validated resumable incoming payloads. A batch commits only when every member is verified. */
 final class IncomingClipboard {
-    interface Status {void update(String message,int percent,boolean receiving);}
-    private final Context context;
-    private final Status status;
-    private final File dir;
-    private static final long MAX=32L*1024*1024, BUDGET=128L*1024*1024;
-    IncomingClipboard(Context c,Status status){context=c.getApplicationContext();this.status=status;dir=directory(c);dir.mkdirs();}
-    static File directory(Context c){return new File(c.getFilesDir(),"received");}
-    private static boolean hash(String value){return value.matches("[a-f0-9]{64}");}
-    private File file(String key,String suffix){return new File(dir,key+suffix);}
-    private JSONObject load(String key)throws Exception{try{return new JSONObject(new String(new AtomicFile(file(key,".json")).readFully(),java.nio.charset.StandardCharsets.UTF_8));}catch(FileNotFoundException e){return null;}}
-    private void save(String key,JSONObject m)throws Exception{m.put("updated",System.currentTimeMillis());AtomicFile f=new AtomicFile(file(key,".json"));FileOutputStream out=null;try{out=f.startWrite();out.write(Wire.utf(m.toString()));f.finishWrite(out);}catch(Exception e){if(out!=null)f.failWrite(out);throw e;}}
-    private static String digest(File f)throws Exception{MessageDigest d=MessageDigest.getInstance("SHA-256");try(InputStream in=new FileInputStream(f)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)d.update(b,0,n);}return Wire.hex(d.digest());}
-    synchronized JSONObject handle(JSONObject b)throws Exception{
-        try{return apply(b);}catch(Exception e){status.update("รับไม่สำเร็จ • "+e.getMessage(),-1,false);throw e;}
-    }
-    private JSONObject apply(JSONObject b)throws Exception{
-        String type=b.getString("type");
-        if("clipboard.text".equals(type)){
-            Object value=b.get("text");if(!(value instanceof String))throw new IOException("Invalid text");String text=(String)value;
-            if(Wire.utf(text).length>512*1024||!Wire.hash(Wire.utf(text)).equals(b.getString("hash")))throw new IOException("Invalid text hash or size");
-            context.getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Universal Clipboard",text));
-            status.update("รับข้อความแล้ว • กดวางได้เลย",100,false);return Wire.obj("applied",true);
-        }
-        if(!type.startsWith("file."))throw new IOException("Unsupported clipboard message");
-        String id=b.getString("transferId"),sender=b.getString("from");if(!hash(id))throw new IOException("Invalid transfer ID");
-        String key=Wire.hash(Wire.utf(sender+":"+id));File part=file(key,".part"),output=file(key,".png");JSONObject m=load(key);
-        if("file.offer".equals(type)){
-            String name=b.getString("name"),sha=b.getString("hash");long size=integer(b,"size");
-            if(!"image".equals(b.optString("kind")))throw new IOException("รองรับข้อความและรูป clipboard เท่านั้น");
-            if(size<1||size>MAX||!hash(sha)||name.isEmpty()||name.length()>200||name.matches(".*[\\\\/\\x00-\\x1f].*"))throw new IOException("Invalid image metadata");
-            if(m!=null&&(!name.equals(m.getString("name"))||size!=m.getLong("size")||!sha.equals(m.getString("hash"))))throw new IOException("Transfer metadata changed");
-            if(m==null){reserve(size,key);m=Wire.obj("name",name,"size",size,"hash",sha);try(FileOutputStream out=new FileOutputStream(part)){out.getFD().sync();}save(key,m);}
-            if(m.optBoolean("complete"))return completed(m,output);
-            // Recover a crash between publishing a verified file and persisting completion.
-            if(output.exists())return finish(key,m,part,output);
-            if(!part.exists())try(FileOutputStream out=new FileOutputStream(part)){out.getFD().sync();}
-            long offset=part.length();if(offset>size)throw new IOException("Invalid partial size");
-            if(offset!=size&&offset%65536!=0){offset-=offset%65536;try(RandomAccessFile f=new RandomAccessFile(part,"rw")){f.setLength(offset);f.getFD().sync();}}
-            save(key,m);status.update("กำลังรับรูปจาก Host…",(int)(offset*100/size),true);return Wire.obj("offset",offset);
-        }
-        if(m==null)throw new IOException("Unknown transfer");long size=m.getLong("size");
-        if("file.cancel".equals(type)){if(!m.optBoolean("complete")){part.delete();new AtomicFile(file(key,".json")).delete();}status.update("ยกเลิกการรับรูปแล้ว",-1,false);return Wire.obj("cancelled",true);}
-        if("file.chunk".equals(type)){
-            if(m.optBoolean("complete"))return Wire.obj("offset",size);
-            String encoded=b.getString("data");if(encoded.length()>87384||!encoded.matches("[A-Za-z0-9+/]*={0,2}"))throw new IOException("Invalid chunk encoding");
-            byte[] bytes=Base64.getDecoder().decode(encoded);long offset=part.length();
-            if(integer(b,"offset")!=offset||integer(b,"sequence")!=offset/65536||offset%65536!=0||bytes.length!=Math.min(65536,size-offset)||bytes.length==0)throw new IOException("Invalid chunk offset or size");
-            try(FileOutputStream out=new FileOutputStream(part,true)){out.write(bytes);out.getFD().sync();}
-            status.update("กำลังรับรูป • "+((offset+bytes.length)*100/size)+"%",(int)Math.min(99,(offset+bytes.length)*100/size),true);
-            return Wire.obj("offset",offset+bytes.length);
-        }
-        if(!"file.finish".equals(type))throw new IOException("Unsupported transfer message");
-        if(m.optBoolean("complete"))return completed(m,output);
-        return finish(key,m,part,output);
-    }
-    private JSONObject finish(String key,JSONObject m,File part,File output)throws Exception{
-        File source=output.exists()?output:part;
-        if(source.length()!=m.getLong("size"))throw new IOException("Image incomplete");
-        if(!digest(source).equals(m.getString("hash"))){part.delete();output.delete();new AtomicFile(file(key,".json")).delete();throw new IOException("Image SHA-256 mismatch");}
-        byte[] signature=new byte[8];try(DataInputStream input=new DataInputStream(new FileInputStream(source))){input.readFully(signature);}
-        if(!Arrays.equals(signature,new byte[]{(byte)137,80,78,71,13,10,26,10}))throw new IOException("Expected PNG image");
-        BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeFile(source.getPath(),bounds);
-        if(bounds.outWidth<=0||bounds.outHeight<=0||(long)bounds.outWidth*bounds.outHeight>16_000_000L)throw new IOException("รูปใหญ่เกิน 16 ล้านพิกเซล");
-        Bitmap decoded=BitmapFactory.decodeFile(source.getPath());if(decoded==null)throw new IOException("Invalid PNG");decoded.recycle();
-        if(!output.exists()&&!part.renameTo(output))throw new IOException("บันทึกรูปไม่สำเร็จ");
-        Uri uri=Uri.parse("content://"+context.getPackageName()+".images/"+key+".png");
-        JSONObject result=Wire.obj("complete",true,"offset",m.getLong("size"));
-        try{
-            context.getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newUri(context.getContentResolver(),"Universal Clipboard image",uri));
-            Config.prefs(context).edit().putString("receivedImage",key).commit();
-            status.update("รับรูปแล้ว • กดวางในแอปที่รองรับรูป",100,false);
-        }catch(Exception e){m.put("clipboardError",e.getMessage()==null?"Clipboard unavailable":e.getMessage());result.put("clipboardError",m.getString("clipboardError"));status.update("รับรูปแล้ว แต่ใส่ clipboard ไม่สำเร็จ",-1,false);}
-        m.put("complete",true);save(key,m);return result;
-    }
-    private JSONObject completed(JSONObject m,File output)throws Exception{
-        if(!output.exists()||output.length()!=m.getLong("size")||!digest(output).equals(m.getString("hash")))throw new IOException("Received image expired; send as a new transfer");
-        JSONObject result=Wire.obj("complete",true,"offset",m.getLong("size"));if(m.has("clipboardError"))result.put("clipboardError",m.getString("clipboardError"));return result;
-    }
-    private static long integer(JSONObject b,String field)throws Exception{Object n=b.get(field);if(!(n instanceof Number)||((Number)n).doubleValue()!=((Number)n).longValue())throw new IOException("Invalid "+field);return ((Number)n).longValue();}
-    private void reserve(long required,String keep)throws Exception{
-        String current=Config.prefs(context).getString("receivedImage","");File[] metas=dir.listFiles((d,n)->n.endsWith(".json"));if(metas==null)return;
-        Arrays.sort(metas,Comparator.comparingLong(File::lastModified));long committed=0;int unfinished=0;
-        for(File f:metas){String key=f.getName().substring(0,64);JSONObject m=load(key);if(m==null)continue;
-            if(System.currentTimeMillis()-m.optLong("updated")>7L*86400000&&!key.equals(current)&&!key.equals(keep)){file(key,".part").delete();file(key,".png").delete();new AtomicFile(f).delete();continue;}
-            committed+=m.getLong("size");if(!m.optBoolean("complete"))unfinished++;
-        }
-        for(File f:metas){if(committed+required<=BUDGET)break;String key=f.getName().substring(0,64);JSONObject m=load(key);if(m!=null&&m.optBoolean("complete")&&!key.equals(current)&&!key.equals(keep)){file(key,".png").delete();new AtomicFile(f).delete();committed-=m.getLong("size");}}
-        if(unfinished>=4||committed+required>BUDGET)throw new IOException("พื้นที่รับรูปเต็ม กรุณายกเลิกงานค้างก่อน");
-    }
+ interface Status{void update(String message,int percent,boolean receiving);}
+ final Context context;final Status status;final File dir;final HistoryStore history;
+ IncomingClipboard(Context c,Status s){context=c.getApplicationContext();status=s;dir=directory(c);dir.mkdirs();history=new HistoryStore(c);history.cleanup();}
+ static File directory(Context c){return new File(c.getFilesDir(),"received");}
+ static boolean hash(String s){return s.matches("[a-f0-9]{64}");}
+ File file(String k,String suffix){return new File(dir,k+suffix);}
+ JSONObject load(String k)throws Exception{try{return new JSONObject(new String(new AtomicFile(file(k,".json")).readFully(),"UTF-8"));}catch(FileNotFoundException e){return null;}}
+ void save(String k,JSONObject m)throws Exception{m.put("updated",System.currentTimeMillis());AtomicFile a=new AtomicFile(file(k,".json"));FileOutputStream o=null;try{o=a.startWrite();o.write(Wire.utf(m.toString()));a.finishWrite(o);}catch(Exception e){if(o!=null)a.failWrite(o);throw e;}}
+ static String digest(File f)throws Exception{MessageDigest d=MessageDigest.getInstance("SHA-256");try(InputStream in=new FileInputStream(f)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)d.update(b,0,n);}return Wire.hex(d.digest());}
+ static long integer(JSONObject b,String field)throws Exception{Object n=b.get(field);if(!(n instanceof Number)||((Number)n).doubleValue()!=((Number)n).longValue())throw new IOException("Invalid "+field);return ((Number)n).longValue();}
+ static void validate(JSONObject b)throws Exception{String name=b.getString("name"),sha=b.getString("hash"),kind=b.optString("kind","file");long size=integer(b,"size");if(!hash(b.getString("transferId"))||!hash(sha)||name.isEmpty()||name.length()>200||name.equals(".")||name.equals("..")||name.matches(".*[\\\\/\\x00-\\x1f\\x7f].*")||(!kind.equals("file")&&!kind.equals("image"))||size<0||size>(kind.equals("image")?32L*1024*1024:256L*1024*1024)||(kind.equals("image")&&size==0))throw new IOException("Invalid file metadata (maximum generic file 256 MiB)");if(name.matches(".*[<>:\"|?*].*")||name.endsWith(".")||name.endsWith(" ")||name.matches("(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\..*)?"))throw new IOException("Unsafe filename");String mime=b.optString("mime","");if(!mime.isEmpty()&&!mime.matches("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+"))throw new IOException("Invalid MIME");}
+ static String mime(JSONObject b){if("image".equals(b.optString("kind")))return "image/png";String v=b.optString("mime","");if(!v.isEmpty())return v;String name=b.optString("name");int p=name.lastIndexOf('.');v=p<0?null:MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substring(p+1).toLowerCase(Locale.ROOT));return v==null?"application/octet-stream":v;}
+ String key(String sender,String id)throws Exception{if(!hash(id))throw new IOException("Invalid transfer ID");return Wire.hash(Wire.utf(sender+":"+id));}
+ synchronized JSONObject handle(JSONObject b)throws Exception{try{return apply(b);}catch(Exception e){status.update("Receive failed: "+e.getMessage(),-1,false);throw e;}}
+ JSONObject apply(JSONObject b)throws Exception{
+ String type=b.getString("type"),sender=b.getString("from");
+ if(type.equals("clipboard.text")){Object v=b.get("text");if(!(v instanceof String))throw new IOException("Invalid text");String text=(String)v;String sha=b.getString("hash");if(Wire.utf(text).length>512*1024||!Wire.hash(Wire.utf(text)).equals(sha))throw new IOException("Invalid text hash/size");String entry=b.optString("entryId",b.optString("requestId",UUID.randomUUID().toString()));if(b.has("entryId")&&!hash(entry))throw new IOException("Invalid text entry ID");String id=Wire.hash(Wire.utf("text:"+sender+":"+entry));JSONObject receipt=load(id);if(receipt!=null){if(!sha.equals(receipt.optString("hash")))throw new IOException("Text entry changed");return Wire.obj("applied",true,"historyId",id);}boolean exists=false;try{history.get(id);exists=true;}catch(FileNotFoundException ignored){}if(!exists)history.text(id,text,sender);save(id,Wire.obj("complete",true,"deliveryDone",true,"kind","text","hash",sha,"historyId",id));if(!exists){history.copy(id);status.update("รับข้อความแล้ว • กดวางได้เลย",100,false);}return Wire.obj("applied",true,"historyId",id);} if(type.startsWith("file.batch."))return batch(b,sender,type);
+ if(!type.startsWith("file."))throw new IOException("Unsupported message");String k=key(sender,b.getString("transferId"));JSONObject m=load(k);File part=file(k,".part"),out=file(k,".payload");
+ if(type.equals("file.offer")){validate(b);if(m!=null){for(String field:new String[]{"name","hash","kind","batchId","index"})if(!m.optString(field).equals(b.optString(field)))throw new IOException("Transfer metadata changed");if(m.getLong("size")!=integer(b,"size"))throw new IOException("Transfer size changed");}else{if(b.has("batchId")){JSONObject batch=load(key(sender,b.getString("batchId"))+"-batch");if(batch==null||batch.optBoolean("cancelled"))throw new IOException("Unknown/cancelled batch");int index=(int)integer(b,"index");JSONArray fs=batch.getJSONArray("files");if(index<0||index>=fs.length())throw new IOException("Invalid batch index");JSONObject expected=fs.getJSONObject(index);for(String f:new String[]{"transferId","name","hash","kind"})if(!expected.optString(f).equals(b.optString(f)))throw new IOException("Batch manifest mismatch");if(expected.getLong("size")!=integer(b,"size")||!mime(expected).equals(mime(b)))throw new IOException("Batch manifest mismatch");}history.reserve(b.has("batchId")?0:integer(b,"size"),!b.has("batchId"));m=new JSONObject(b.toString());m.put("sender",sender);m.put("mime",mime(b));try(FileOutputStream f=new FileOutputStream(part)){f.getFD().sync();}save(k,m);}
+ if(m.optBoolean("complete"))return finish(k,m,part,out);if(out.exists())return finish(k,m,part,out);if(!part.exists())try(FileOutputStream f=new FileOutputStream(part)){f.getFD().sync();}long offset=part.length(),size=m.getLong("size");if(offset>size)throw new IOException("Invalid partial size");if(offset!=size&&offset%65536!=0){offset-=offset%65536;try(RandomAccessFile f=new RandomAccessFile(part,"rw")){f.setLength(offset);f.getFD().sync();}}status.update("Receiving "+m.getString("name"),size==0?0:(int)(offset*100/size),true);return Wire.obj("offset",offset);}
+ if(m==null)throw new IOException("Unknown transfer");long size=m.getLong("size");
+ if(type.equals("file.cancel")){if(m.has("batchId")){JSONObject batch=load(key(sender,m.getString("batchId"))+"-batch");if(batch!=null&&!batch.optBoolean("complete")){batch.put("cancelled",true);save(key(sender,m.getString("batchId"))+"-batch",batch);}}if(!m.optBoolean("complete")){part.delete();new AtomicFile(file(k,".json")).delete();}status.update("Receive cancelled",-1,false);return Wire.obj("cancelled",true);}
+ if(type.equals("file.chunk")){if(m.optBoolean("complete"))return Wire.obj("offset",size);String encoded=b.getString("data");if(encoded.length()>87384||!encoded.matches("[A-Za-z0-9+/]*={0,2}"))throw new IOException("Invalid encoding");byte[] bytes=Base64.getDecoder().decode(encoded);long offset=part.length();if(integer(b,"offset")!=offset||integer(b,"sequence")!=offset/65536||offset%65536!=0||bytes.length!=Math.min(65536,size-offset)||bytes.length==0)throw new IOException("Invalid chunk offset/size");try(FileOutputStream f=new FileOutputStream(part,true)){f.write(bytes);f.getFD().sync();}status.update("Receiving "+m.getString("name"),(int)Math.min(99,(offset+bytes.length)*100/Math.max(1,size)),true);return Wire.obj("offset",offset+bytes.length);}
+ if(!type.equals("file.finish"))throw new IOException("Unsupported transfer message");return finish(k,m,part,out);
+ }
+ void verify(JSONObject m,File f)throws Exception{if(!f.isFile()||f.length()!=m.getLong("size")||!digest(f).equals(m.getString("hash")))throw new IOException("File incomplete or SHA-256 mismatch");if("image".equals(m.optString("kind"))){byte[] signature=new byte[8];try(DataInputStream in=new DataInputStream(new FileInputStream(f))){in.readFully(signature);}if(!Arrays.equals(signature,new byte[]{(byte)137,80,78,71,13,10,26,10}))throw new IOException("Expected PNG");BitmapFactory.Options o=new BitmapFactory.Options();o.inJustDecodeBounds=true;BitmapFactory.decodeFile(f.getPath(),o);if(o.outWidth<=0||o.outHeight<=0||(long)o.outWidth*o.outHeight>16000000)throw new IOException("Image exceeds 16 million pixels");Bitmap bm=BitmapFactory.decodeFile(f.getPath());if(bm==null)throw new IOException("Invalid PNG");bm.recycle();}}
+ JSONObject ref(String k,JSONObject m)throws Exception{return Wire.obj("name",m.getString("name"),"size",m.getLong("size"),"hash",m.getString("hash"),"mime",m.getString("mime"),"path","received/"+k+".payload");}
+ JSONObject publish(String id,String kind,String sender,JSONArray refs)throws Exception{boolean exists=false;try{history.get(id);exists=true;}catch(FileNotFoundException ignored){}JSONObject r=Wire.obj("complete",true,"historyId",id);if(exists)return r;history.commit(Wire.obj("id",id,"kind",kind,"mime",refs.getJSONObject(0).getString("mime"),"sender",sender,"files",refs));try{history.copy(id);}catch(Exception e){r.put("clipboardError",e.getMessage());}try{HistoryActivity.notifyReceived(context,id);}catch(SecurityException ignored){}status.update(kind.equals("image")?"รับรูปแล้ว • กดวางในแอปที่รองรับรูป":"รับไฟล์แล้ว • เปิด / แชร์ / บันทึกได้จากประวัติ",100,false);return r;}
+ JSONObject finish(String k,JSONObject m,File part,File out)throws Exception{if(m.optBoolean("deliveryDone")){JSONObject cached=Wire.obj("complete",true,"offset",m.getLong("size"),"historyId",m.optString("historyId",k));if(m.has("clipboardError"))cached.put("clipboardError",m.getString("clipboardError"));return cached;}File source=out.exists()?out:part;verify(m,source);if(!out.exists()&&!part.renameTo(out))throw new IOException("Cannot persist payload");m.put("complete",true);save(k,m);JSONObject r=Wire.obj("complete",true,"offset",m.getLong("size"));if(!m.has("batchId"))r.put("historyId",k);if(m.optBoolean("deliveryDone")){if(m.has("clipboardError"))r.put("clipboardError",m.getString("clipboardError"));return r;}if(!m.has("batchId")){JSONObject result=publish(k,m.optString("kind","file"),m.getString("sender"),new JSONArray().put(ref(k,m)));if(result.has("clipboardError")){r.put("clipboardError",result.getString("clipboardError"));m.put("clipboardError",result.getString("clipboardError"));}m.put("deliveryDone",true);m.put("historyId",k);save(k,m);}return r;}
+ JSONObject batch(JSONObject b,String sender,String type)throws Exception{String id=b.getString("batchId"),k=key(sender,id)+"-batch";JSONObject m=load(k);
+ if(type.equals("file.batch.offer")){JSONArray fs=b.getJSONArray("files");if(fs.length()<1||fs.length()>64||integer(b,"count")!=fs.length())throw new IOException("Invalid batch count");Set<String> ids=new HashSet<>();for(int i=0;i<fs.length();i++){JSONObject f=fs.getJSONObject(i);validate(f);if(!"file".equals(f.optString("kind"))||!ids.add(f.getString("transferId")))throw new IOException("Invalid batch manifest");}if(m!=null){if(!m.getJSONArray("files").toString().equals(fs.toString()))throw new IOException("Batch changed");if(m.optBoolean("cancelled"))throw new IOException("Batch cancelled");return m.optBoolean("deliveryDone")?m.getJSONObject("deliveryResult"):Wire.obj("complete",m.optBoolean("complete"));}long total=0;for(int i=0;i<fs.length();i++)total+=fs.getJSONObject(i).getLong("size");history.reserve(total,true);m=Wire.obj("files",fs,"sender",sender,"batchId",id);save(k,m);return Wire.obj("complete",false);}
+ if(m==null)throw new IOException("Unknown batch");JSONArray fs=m.getJSONArray("files");if(type.equals("file.batch.cancel")){if(!m.optBoolean("complete")){for(int i=0;i<fs.length();i++){String fk=key(sender,fs.getJSONObject(i).getString("transferId"));JSONObject f=load(fk);if(f!=null){file(fk,".part").delete();file(fk,".payload").delete();new AtomicFile(file(fk,".json")).delete();}}m.put("cancelled",true);save(k,m);}return Wire.obj("cancelled",true);}if(!type.equals("file.batch.finish")||m.optBoolean("cancelled"))throw new IOException("Unsupported/cancelled batch");if(m.optBoolean("deliveryDone"))return m.getJSONObject("deliveryResult");JSONArray refs=new JSONArray();for(int i=0;i<fs.length();i++){String fk=key(sender,fs.getJSONObject(i).getString("transferId"));JSONObject f=load(fk);if(f==null||!f.optBoolean("complete"))throw new IOException("Batch incomplete");verify(f,file(fk,".payload"));refs.put(ref(fk,f));}if(m.optBoolean("deliveryDone"))return m.getJSONObject("deliveryResult");JSONObject result=publish(key(sender,id),"files",sender,refs);m.put("complete",true);m.put("deliveryDone",true);m.put("deliveryResult",result);save(k,m);return result;}
 }

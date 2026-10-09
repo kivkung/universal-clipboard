@@ -49,5 +49,5 @@ final class Config {
         if(!prefs(c).edit().putString("host",host).putInt("port",port).putString("name",name).putString("id",id)
             .putString("secret",secret).putString("iv",Base64.getEncoder().encodeToString(cipher.getIV())).putString("inviteId",inviteId).putString("hubId",hubId).commit()) throw new Exception("บันทึกการตั้งค่าไม่สำเร็จ");
     }
-    boolean valid() { return !host.isEmpty() && (pin.matches("[0-9]{6}")||pin.matches("[a-f0-9]{64}")) && !name.isEmpty(); }
+    boolean valid() { return (!(host.startsWith("https:")||host.startsWith("wss:"))||(pin.matches("[a-f0-9]{64}")&&!hubId.isEmpty())) && !host.isEmpty() && (pin.matches("[0-9]{6}")||pin.matches("[a-f0-9]{64}")) && !name.isEmpty(); }
 }

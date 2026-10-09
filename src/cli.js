@@ -9,11 +9,16 @@ import { startService, control } from './service.js';
 import { clipboardDoctor, readClipboard } from './clipboard.js';
 import { inviteUri, parseInvite } from './pairing.js';
 import QRCode from 'qrcode';
+import { internetOrigin } from './internet.js';
 
 const usage = [
 'Universal Clipboard LAN',
 '  uc setup                       Guided first-time setup',
 '  uc start                       Start sync using saved settings',
+'  uc host --internet             LAN + Cloudflare HTTPS/WSS session',
+'  uc host --local-only           LAN only; stop publishing Internet endpoint',
+'  uc join <https-url>            Update a saved paired Host address',
+'  uc qr --internet               Private URL invite / CLI command / QR',
 '  uc host [--port 3000]           Create a Hub, start sync and show pairing QR',
 '  uc join <ip> <pin> [--port 3000] Pair and start sync',
 '  uc discover                    Find Hubs on this LAN',
@@ -23,6 +28,12 @@ const usage = [
 '  uc qr [--address IP]            One-use Android/Desktop invite (2 minutes)',
 '  uc join "uvc://join?..."         Join using an invitation',
 '  uc send-clipboard [--to ID]     Send copied files explicitly',
+'  uc history [list|usage]        Latest five received entries / storage use',
+'  uc history copy|open <id>      Copy again or open a received entry',
+'  uc history save <id> <dir>     Export permanently without overwrite',
+'  uc history release <id>        Release opened entry after closing its files',
+'  uc history budget <MiB>        Configure history/partial storage budget',
+'  uc auto-files on|off          Automatically send copied regular files',
 '  uc push [text] [--to ID]        Send text (clipboard if omitted)',
 '  uc send-file <paths...> [--to ID|all]',
 '  uc transfers                   Show unfinished outgoing transfers',
@@ -37,15 +48,17 @@ const usage = [
 ].join('\n');
 async function showPairingQr(invite) {
   console.log('Scan in the Android app → Scan QR. Valid for 2 minutes / one device.');
-  console.log('Host: ' + invite.host + ':' + invite.port);
+  console.log('Host: ' + (invite.url || invite.host + ':' + invite.port));
+  console.log('Workstation: uc join "' + inviteUri(invite) + '"');
   console.log(await QRCode.toString(inviteUri(invite), { type: 'terminal', small: true, errorCorrectionLevel: 'M' }));
   console.log('Treat this QR as a private invitation. Run uc qr to generate a new one if expired.');
 }
 async function main() {
-  const { positionals, values } = parseArgs({ allowPositionals: true, options: { to: { type: 'string' }, address: { type: 'string' }, port: { type: 'string', default: '3000' }, 'data-dir': { type: 'string' }, help: { type: 'boolean' } } });
+  const { positionals, values } = parseArgs({ allowPositionals: true, options: { to: { type: 'string' }, address: { type: 'string' }, port: { type: 'string', default: '3000' }, 'data-dir': { type: 'string' }, help: { type: 'boolean' }, internet: { type: 'boolean' }, 'local-only': { type: 'boolean' } } });
   if (values['data-dir']) process.env.UC_DATA_DIR = path.resolve(values['data-dir']);
   let [cmd, ...args] = positionals;
   if (values.help || cmd === 'help') { console.log(usage); return; }
+  if (values.internet && values['local-only']) throw new Error('Choose --internet or --local-only');
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be 1-65535');
   const dir = dataDirectory();
@@ -68,7 +81,7 @@ async function main() {
         state.name = (await rl.question('Device name [' + state.name + ']: ')).trim() || state.name;
         const role = (await rl.question('Create a group (h) or join one (j)? [h]: ')).trim().toLowerCase() || 'h';
         if (!['h', 'j'].includes(role)) throw new Error('Choose h or j');
-        if (role === 'h') { state.role = 'hub'; state.port = port; }
+        if (role === 'h') { state.role = 'hub'; state.port = port; state.internet = (await rl.question('Connection: local only (l) or local + Internet (i)? [l]: ')).trim().toLowerCase() === 'i'; }
         else {
           const hubs = await discover();
           if (hubs.length) console.table(hubs.map((h, index) => ({ number: index + 1, name: h.name, address: h.address, port: h.port })));
@@ -79,11 +92,14 @@ async function main() {
           state.role = 'client'; state.hub = { host: selected?.address || answer, port: selected?.port || port }; state.pin = pin; delete state.pairing;
         }
       } finally { rl.close(); }
-    } else if (cmd === 'host') { state.role = 'hub'; state.port = port; }
+    } else if (cmd === 'host') { state.role = 'hub'; state.port = port; state.internet = !!values.internet; }
     else {
       const [host, second, third] = args;
       if (host?.startsWith('uvc:')) {
-        const invite = parseInvite(host); state.role = 'client'; state.hub = { host: invite.host, port: invite.port }; state.pairing = { id: invite.id, secret: invite.secret, hubId: invite.hubId }; delete state.pin;
+        const invite = parseInvite(host); state.role = 'client'; state.hub = invite.url ? { url: invite.url } : { host: invite.host, port: invite.port }; state.pairing = { id: invite.id, secret: invite.secret, hubId: invite.hubId }; delete state.pin;
+      } else if (host?.startsWith('https:') || host?.startsWith('wss:')) {
+        if (!state.pairing?.secret || !state.pairing?.hubId || state.pairing?.id || second) throw new Error('New Internet devices need a private invitation: uc join "uvc://join?..."');
+        state.role = 'client'; state.hub = { url: internetOrigin(host) };
       } else {
       const pin = third || second;
       const actualPort = third ? Number(second) : port;
@@ -94,11 +110,16 @@ async function main() {
     saveState(state, dir); cmd = 'start';
   }
   if (cmd === 'start' || cmd === 'watch') {
+    if (values.internet || values['local-only']) { const settings = loadState(dir); if (settings.role !== 'hub') throw new Error('Internet/local-only flags are Host options'); settings.internet = !!values.internet; saveState(settings, dir); }
     const service = await startService({ dir });
     const stop = async () => { await service.close(); process.exit(0); };
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     if (service.hub) {
-      try { await showPairingQr(await service.command('qr', [values.address])); }
+      try { await showPairingQr(await service.command('qr', [values.address, false]));
+        await service.internetReady;
+        const status = await service.command('status', []);
+        if (status.internet?.url) await showPairingQr(await service.command('qr', [undefined, true]));
+      }
       catch (error) { console.error('Pairing QR unavailable: ' + error.message + '. Run uc qr --address <Host LAN IP> when ready.'); }
     }
     return;
@@ -110,7 +131,7 @@ async function main() {
   }
   let result;
   if (cmd === 'qr') {
-    const invite = await control('qr', [values.address]);
+    const invite = await control('qr', [values.address, !!values.internet]);
     await showPairingQr(invite);
     return;
   }
@@ -123,7 +144,14 @@ async function main() {
     result = await control(cmd, [args.map(x => path.resolve(x)), values.to]);
   } else if (cmd === 'send-clipboard') {
     result = await control(cmd, [values.to]);
-  } else if (['devices', 'transfers', 'resume', 'pause', 'unpause', 'revoke', 'rename', 'receive-dir', 'cancel'].includes(cmd)) {
+  } else if (cmd === 'history') {
+    if (args[0] === 'save' && args[2]) args[2] = path.resolve(args[2]);
+    result = await control('history', args);
+    if (!args.length || args[0] === 'list') {
+      console.table(result.map(entry => ({ id: entry.id, type: entry.kind, files: entry.payloads.map(item => item.name).join(', '), bytes: entry.size, received: entry.timestamp, sender: entry.sender?.name || entry.sender?.id || '' })));
+      return;
+    }
+  } else if (['devices', 'transfers', 'resume', 'pause', 'unpause', 'auto-files', 'revoke', 'rename', 'receive-dir', 'cancel'].includes(cmd)) {
     if (['revoke', 'rename', 'receive-dir', 'cancel'].includes(cmd) && !args.length) throw new Error('Missing argument');
     if (cmd === 'receive-dir') args[0] = path.resolve(args[0]);
     result = await control(cmd, args);

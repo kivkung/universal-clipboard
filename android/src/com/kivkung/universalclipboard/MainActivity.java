@@ -49,7 +49,7 @@ public final class MainActivity extends Activity {
         TextView heading=text("Universal Clipboard",28,Color.rgb(24,38,34));heading.setTypeface(null,Typeface.BOLD);box.addView(heading);gap(box,8);
         box.addView(text("เชื่อมต่อครั้งเดียว แล้วส่งจากแถบแจ้งเตือนได้เลย",15,Color.DKGRAY));gap(box,24);
         Button scan=button(box,"Scan QR · จับคู่จากคอม",false);scan.setOnClickListener(v->{if(ClipboardService.busy){Toast.makeText(this,"รอส่งเสร็จหรือกด STOP ก่อนเปลี่ยน Host",Toast.LENGTH_LONG).show();return;}startActivityForResult(new Intent(this,ScanActivity.class),20);});
-        ip=field(box,"Host IP","เช่น 192.168.1.10",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
+        ip=field(box,"Host IP / HTTPS URL","192.168.1.10 หรือ https://…trycloudflare.com",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
         pin=field(box,"PIN ของ Host","ตัวเลข 6 หลัก",InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_VARIATION_PASSWORD);
         name=field(box,"Device name · ชื่อมือถือ","Nothing Phone",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_CAP_WORDS);
         TextView advanced=text("ตั้งค่าเพิ่มเติม ▾",14,Color.rgb(8,127,120));box.addView(advanced);gap(box,8);
@@ -58,11 +58,12 @@ public final class MainActivity extends Activity {
         join=button(box,"เชื่อมต่อ · Join Host",true);join.setId(android.R.id.button1);join.setOnClickListener(v->join());
         state=text(ClipboardService.status,14,Color.rgb(8,100,95));box.addView(state);gap(box,20);
         send=button(box,"SEND · ส่ง clipboard",false);send.setOnClickListener(v->startActivity(new Intent(this,SendActivity.class)));
+        Button history=button(box,"History · ประวัติ clipboard",false);history.setOnClickListener(v->startActivity(new Intent(this,HistoryActivity.class)));
         Button stop=button(box,"STOP · ปิดแอป",false);stop.setOnClickListener(v->sendBroadcast(new Intent(this,StopReceiver.class)));
         TextView clear=text("ล้างรายการส่งที่ค้างไว้",14,Color.DKGRAY);clear.setPadding(0,dp(12),0,dp(12));box.addView(clear);
         clear.setOnClickListener(v->{if(ClipboardService.busy){Toast.makeText(this,"กด STOP แล้วเปิดแอปใหม่ก่อนล้างงานค้าง",Toast.LENGTH_LONG).show();return;}
             new AlertDialog.Builder(this).setTitle("ล้างงานค้าง?").setMessage("ลบรายการที่รอส่งออกจากมือถือ เพื่อส่ง clipboard ชิ้นใหม่").setNegativeButton("ยกเลิก",null).setPositiveButton("ล้าง",(d,w)->{Jobs.clear(this);Toast.makeText(this,"ล้างแล้ว",Toast.LENGTH_SHORT).show();}).show();});
-        gap(box,16);box.addView(text("เริ่มต้นบนคอม: เปิด Host แล้วใช้ IP และ PIN ที่แสดง\nมือถือและคอมต้องอยู่ในเครือข่ายเดียวกัน\n\nSEND เปิดหน้าต่างอ่าน clipboard ชั่วครู่ แล้วส่งไปยัง Host โดยตรง\nSTOP ปิดแอปทั้งหมด เปิดแอปและกด Join Host เพื่อเริ่มใหม่",13,Color.GRAY));
+        gap(box,16);box.addView(text("เริ่มต้นบนคอม: เปิด Host แล้วใช้ IP และ PIN ที่แสดง\nLocal: ใช้เครือข่ายเดียวกัน · Internet: ใช้ QR จาก uc qr --internet\n\nSEND เปิดหน้าต่างอ่าน clipboard ชั่วครู่ แล้วส่งไปยัง Host โดยตรง\nSTOP ปิดแอปทั้งหมด เปิดแอปและกด Join Host เพื่อเริ่มใหม่",13,Color.GRAY));
         setContentView(scroll);
         try{saved=Config.load(this);ip.setText(saved.host);pin.setText(saved.pin.matches("[0-9]{6}")?saved.pin:"");if(saved.pin.length()==64)pin.setHint("จับคู่ด้วย QR แล้ว ไม่ต้องกรอก PIN");name.setText(saved.name);port.setText(String.valueOf(saved.port));}
         catch(Exception e){state.setText("อ่านค่าที่บันทึกไม่ได้ กรุณากรอกใหม่");name.setText(Build.MODEL);port.setText("3000");}
@@ -71,10 +72,13 @@ public final class MainActivity extends Activity {
         Config credentials=saved;
         if(pendingInvite==null){try{credentials=Config.load(this);}catch(Exception e){state.setText("อ่านการตั้งค่าไม่ได้: "+e.getMessage());return;}}
         String host=ip.getText().toString().trim(),code=pin.getText().toString().trim(),label=name.getText().toString().trim();
-        if(!host.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")){ip.setError("กรอก IPv4 ที่แสดงบน Host เช่น 192.168.1.10");return;}
-        for(String part:host.split("\\."))if(Integer.parseInt(part)>255){ip.setError("IP ไม่ถูกต้อง");return;}
-        boolean qr=credentials!=null&&credentials.pin.matches("[a-f0-9]{64}")&&credentials.host.equals(host)&&String.valueOf(credentials.port).equals(port.getText().toString().trim())&&code.isEmpty();
+        boolean remote=host.startsWith("https:")||host.startsWith("wss:");
+        if(remote){try{host=WebSocketTransport.origin(host);}catch(Exception e){ip.setError(e.getMessage());return;}}
+        if(!remote&&!host.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")){ip.setError("กรอก IPv4 ที่แสดงบน Host เช่น 192.168.1.10");return;}
+        if(!remote)for(String part:host.split("\\."))if(Integer.parseInt(part)>255){ip.setError("IP ไม่ถูกต้อง");return;}
+        boolean qr=credentials!=null&&credentials.pin.matches("[a-f0-9]{64}")&&(credentials.host.equals(host)||(remote&&credentials.inviteId.isEmpty()&&!credentials.hubId.isEmpty()))&&(remote||String.valueOf(credentials.port).equals(port.getText().toString().trim()))&&code.isEmpty();
         if(qr&&pendingInvite!=null&&pendingInvite.expires<=System.currentTimeMillis()){state.setText("QR หมดอายุ กรุณารัน uc qr แล้วสแกนใหม่ก่อนเชื่อมต่อ");return;}
+        if(remote&&!qr){pin.setError("Internet ต้องสแกน/วางคำเชิญก่อน ไม่ใช้ PIN กลุ่ม");return;}
         if(!qr&&!code.matches("[0-9]{6}")){pin.setError("PIN ต้องเป็นตัวเลข 6 หลัก หรือสแกน QR");return;}
         if(label.isEmpty()||label.length()>80){name.setError("ชื่อ 1–80 ตัวอักษร");return;}
         int number;try{number=Integer.parseInt(port.getText().toString());if(number<1||number>65535)throw new Exception();}catch(Exception e){port.setError("Port ต้องอยู่ระหว่าง 1–65535");port.getParent();return;}

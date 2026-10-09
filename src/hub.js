@@ -64,6 +64,7 @@ export class Hub extends EventEmitter {
         const savedKey = this.state.peers[msg.deviceId]?.authKey;
         // Retry by the already-paired ID/secret is safe when auth.ok was lost.
         if (msg.inviteId && (!invitation || invitation.expires <= Date.now()) && !savedKey) return failAuth('INVITE_EXPIRED_OR_USED');
+        if (socket.publicTransport && !invitation && !savedKey) return failAuth('INVITATION_REQUIRED');
         // A fresh valid invitation explicitly re-pairs this device. Completed
         // invitation retries still use its persisted key after the invite is gone.
         const authKey = invitation ? deriveKey(invitation.secret, this.state.salt) : savedKey ? Buffer.from(savedKey, 'base64url') : this.key;
@@ -92,7 +93,7 @@ export class Hub extends EventEmitter {
         if (body.requestId) await this.send(peer, { replyTo: body.requestId, from: body.to, error: 'Recipient offline', retryable: true });
         return;
       }
-      const forwarded = { ...body, from: peer.id }; delete forwarded.seq;
+      const forwarded = { ...body, from: peer.id, fromName: peer.name }; delete forwarded.seq;
       try { await this.send(target, forwarded); }
       catch { target.socket.destroy(); }
     }, error => this.emit('warning', error.message));

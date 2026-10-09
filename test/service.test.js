@@ -8,13 +8,14 @@ import { saveState } from '../src/state.js';
 import { startService, control } from '../src/service.js';
 import { hashText } from '../src/protocol.js';
 import { fileHash } from '../src/transfers.js';
+import { PNG } from 'pngjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const memory = () => {
   let item = null;
   return { read: async () => item, write: async value => {
     const bytes = value.path ? fs.readFileSync(value.path) : value.bytes;
-    item = value.kind === 'image' ? { kind: 'image', bytes, hash: hashText(bytes) } : { ...value, hash: hashText(value.text) };
+    item = value.kind === 'image' ? { kind: 'image', bytes, hash: hashText(bytes) } : { ...value, hash: hashText(value.kind === 'files' ? JSON.stringify(value.files) : value.text) };
   } };
 };
 async function until(fn) {
@@ -37,7 +38,7 @@ test('service controls live Hub, watches image/text, reconnects and rejects untr
   assert.equal((await bClip.read()).text, 'from live hub');
   await aClip.write({ kind: 'text', text: 'automatic watcher' });
   await until(async () => (await bClip.read())?.text === 'automatic watcher');
-  const png = Buffer.from('image fixture bytes for transport', 'utf8');
+  const png = PNG.sync.write(new PNG({ width: 2, height: 2 }));
   await bClip.write({ kind: 'image', bytes: png });
   await until(async () => (await aClip.read())?.kind === 'image');
   assert.deepEqual((await aClip.read()).bytes, png);
@@ -46,8 +47,8 @@ test('service controls live Hub, watches image/text, reconnects and rejects untr
   await control('unpause', [], aDir);
   const file = path.join(root, 'from-hub.bin'); fs.writeFileSync(file, crypto.randomBytes(100000));
   const [sent] = await control('send-file', [[file], b.endpoint.id], aDir);
-  assert.equal(sent.results[0].error, undefined, JSON.stringify(sent.results[0]));
-  assert.equal(await fileHash(sent.results[0].path), await fileHash(file));
+  assert.equal(sent.error, undefined, JSON.stringify(sent));
+  assert.equal(await fileHash(sent.files[0].path), await fileHash(file));
   const { port } = JSON.parse(fs.readFileSync(path.join(aDir, 'service.json')));
   const status = await new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method: 'POST' }, res => { res.resume(); resolve(res.statusCode); });

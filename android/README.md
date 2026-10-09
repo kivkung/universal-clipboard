@@ -1,11 +1,15 @@
-# Universal Clipboard Android 0.4.0 demo
+# Universal Clipboard Android 0.5.0 release
+
+## Internet transport (0.5.0)
+
+Host IP field also accepts HTTPS Host URLs. Pair using a v2 Internet QR/pasted invitation, then Join. TLS/WSS interop passed on emulator against a real Cloudflare Quick Tunnel; no physical-device claim. See [handoff and signing notes](../docs/handoffs/INTERNET-TUNNEL-HANDOFF.md). The canonical build uses this workspace's demo key; the previously separately built APK used a different key, so updates between those builds may not be compatible.
 
 Native Android application (Java), Android 10+ / target API 35. No Node, Termux, keyboard replacement, overlay permission, accessibility service, or root needed on the phone.
 
 ## Use
 
-1. Install the signed `../../releas/universal-clipboard-0.4.0.apk` on a test phone. A different signing key cannot update the old APK; preserve existing data and use the original key when authorized.
-2. Run desktop UCP/2 Host 0.4.0 for QR pairing. Keep its terminal running. PIN pairing remains compatible with older UCP/2 Hosts.
+1. Install the signed `../releases/0.5.0/universal-clipboard-0.5.0.apk` on a test phone. A different signing key cannot update the old APK; preserve existing data and use the original key when authorized.
+2. Run desktop UCP/2 Host 0.5.0 for QR pairing. Keep its terminal running. PIN pairing remains compatible with older UCP/2 Hosts.
 3. Enter Host IPv4, its six-digit PIN, and the phone's device name. Port defaults to 3000; expand advanced settings only for a custom port.
 4. Tap Join Host and allow notifications. Settings persist; the PIN is encrypted with Android Keystore and excluded from backups.
 5. Copy text or an image, open notifications, tap SEND. A focused Activity captures a snapshot and closes itself; no second confirmation.
@@ -39,7 +43,7 @@ Requirements: JDK 21, Android SDK platform android-36.1 and Build Tools 36.0.0, 
 
 The script also detects default Android Studio and cached Bouncy Castle locations. Dependency: https://repo.maven.apache.org/maven2/org/bouncycastle/bcprov-jdk18on/1.79/
 
-Output: `../../releas/universal-clipboard-0.4.0.apk`. A local `demo-signing.jks` is created on first build and excluded from Git/source exports. Keep it privately to sign compatible updates. Its demo password is `android`; this is not a production release key. The manifest is not debuggable. ZXing core 3.5.3 is pinned under vendor; its SHA-256 is verified by the build script. Required compression assemblies are loaded explicitly for Windows PowerShell.
+Output: `../releases/0.5.0/universal-clipboard-0.5.0.apk` (versionCode 7). The build rejects mismatched Android/desktop release versions. A local `demo-signing.jks` is created on first build and excluded from Git/source exports. Keep it privately to sign compatible updates. Its demo password is `android`; this is not a production release key. The manifest is not debuggable. ZXing core 3.5.3 is pinned under vendor; its SHA-256 is verified by the build script. Required compression assemblies are loaded explicitly for Windows PowerShell.
 
 ## Source map
 
@@ -75,3 +79,62 @@ Test runner: start `node test/host.mjs`, build `test/build.ps1`, install both AP
 - Notification reports receiving progress, received text/image and errors. Existing SEND progress and STOP behavior remain.
 
 Validation on API 37 emulator against the Node Host: QR decode, scan only fills the form without starting the service or saving new settings, explicit Join connects and stores the QR credential, background text receive, background PNG receive, reconnect resume at 65536 bytes, actual clipboard contents, pasting an image in a separate app through Android URI grants, rejection of non-Host sender/bad text hash/out-of-order chunks/non-PNG data. Outgoing text, image and generic content URI tests passed. Current APK versionCode=5 uses the local 0.4.0 signing key. Physical phone Wi-Fi connectivity remains unverified.
+
+## Received clipboard history
+
+Android now accepts generic incoming regular files (including empty files), up to
+256 MiB per file, and PNG images up to the existing 32 MiB / 16 million pixel
+limits. Bytes are persisted in resumable partial files and verified by SHA-256
+before publication. `file.batch.offer` supplies a sender-scoped identity and
+complete manifest; members include `batchId` and zero-based `index`.
+`file.batch.finish` validates every completed member and publishes the complete
+file list as one history entry. Incomplete, cancelled and invalid transfers never
+append successful history. Outgoing captures are not an additional receipt entry.
+
+Use **History** on the main screen for the latest five successful received text,
+image or file entries. Each entry has its own durable metadata and local payload
+references. **Copy** republishes the complete entry; **Open** selects a file in a
+batch, **Share** grants read access to an external app, and **Save** creates a
+permanent MediaStore Downloads / Universal Clipboard export. A received-file
+notification also offers Open / Share / Save. Clipboard attachment paste depends
+on the receiving application's support; these actions remain usable regardless.
+
+The storage budget defaults to **1 GiB**, configurable in the History screen
+(256–65536 MiB). It accounts for app-private payloads, unfinished reservations and
+pinned files, and requires at least **16 MiB** additional filesystem free space.
+Existing history is never evicted to make a failed incoming offer fit. Under
+pressure the offer is rejected clearly; cancel unfinished transfers, release
+clipboard references, or increase the budget. Saving permanently does not itself
+release a pinned temporary attachment.
+
+The five-entry limit applies to visible history, not an immediate byte cap.
+Logical eviction retains the current app-published clipboard entry indefinitely
+until another entry is copied/published. Open provider descriptors pin payloads
+until closed; clipboard/open/share operations also persist a conservative
+**24-hour read lease**, including after restart. Physical cleanup runs when the
+receiver starts, storage is reserved, or a descriptor closes, and only deletes
+retired unpinned history payloads. Permanent Downloads exports and pre-existing
+receive files are never eviction targets. Lowering the budget below existing
+usage blocks new receipts rather than deleting active/pinned content. AtomicFile
+metadata and complete-transfer retries recover interrupted commits. Corrupt or
+orphaned payloads are retained conservatively and count against storage rather
+than being deleted without reliable ownership metadata.
+
+Instrumentation `HistorySmoke` checks generic bytes, empty files, MIME/name/size,
+read-only provider behavior, external-app URI grants, completion retry, batch
+atomicity, FIFO/reload and budget rejection. The existing `Smoke` also verifies
+manual QR Join, focused capture and background receiving. Tests require an
+emulator/device and a freshly built APK; `HistorySmoke` does not require a Host.
+
+Build 0.4.0 uses Android versionCode 6 for the received-history update. The
+`HistorySmoke` suite also saves a unique binary/empty two-file batch through
+MediaStore Downloads, verifies exported bytes after history FIFO eviction, and
+restarts the receiver before replaying an already physically evicted text entry
+with a stable `entryId`. Receipt tombstones prevent that retry from resurrecting
+history or replacing a newer clipboard. Exports produced by these emulator
+checks are deliberately retained; tests never delete user Downloads.
+
+The normal `Smoke` suite additionally verifies a real encrypted Node → Android
+batch (`interop.bin` and zero-byte `empty.dat`), including the two local clipboard
+URIs, display names, sizes and readable bytes. Emulator coverage does not imply
+physical Nothing Phone 3a verification.

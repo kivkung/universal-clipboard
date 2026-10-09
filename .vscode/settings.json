@@ -1,0 +1,12 @@
+{
+  "java.project.sourcePaths": [
+    "android/src",
+    "android/test",
+    "android/build/generated"
+  ],
+  "java.project.referencedLibraries": [
+    "C:/Users/kivku/AppData/Local/Android/Sdk/platforms/android-36.1/android.jar",
+    "C:/Users/kivku/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/1.79/**/*.jar",
+    "android/vendor/zxing-core-3.5.3.jar"
+  ]
+}

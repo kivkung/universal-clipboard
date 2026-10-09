@@ -3,14 +3,17 @@ param(
     [string]$Jdk = 'C:\Program Files\Android\Android Studio\jbr',
     [string]$BouncyCastle = '',
     [string]$ZXing = "$PSScriptRoot\vendor\zxing-core-3.5.3.jar",
-    [string]$OutputDirectory = "$PSScriptRoot\..\..\releas"
+    [string]$OutputDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 [xml]$manifest = Get-Content -LiteralPath AndroidManifest.xml -Raw
 $version = $manifest.manifest.GetAttribute('versionName', 'http://schemas.android.com/apk/res/android')
 if ($version -notmatch '^\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw 'Invalid Android versionName' }
+$desktopVersion = (Get-Content -LiteralPath "$PSScriptRoot\..\package.json" -Raw | ConvertFrom-Json).version
+if ($version -ne $desktopVersion) { throw "Release version mismatch: Android=$version, desktop=$desktopVersion. Align both before building." }
+if (!$OutputDirectory) { $OutputDirectory = Join-Path "$PSScriptRoot\..\releases" $version }
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $outputApk = Join-Path $OutputDirectory "universal-clipboard-$version.apk"
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 if (!$BouncyCastle) {

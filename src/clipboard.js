@@ -52,7 +52,12 @@ async function writeOnce(item) {
       imageWriter.setImage(decoded.width, decoded.height, decoded.data);
     } else await cb.setImageBinary(Array.from(bytes));
   }
-  else await cb.setText(item.text);
+  else if (item.kind === 'files') {
+    const files = item.files.map(file => typeof file === 'string' ? file : file.path);
+    if (!files.length || files.length > 64 || files.some(file => !path.isAbsolute(file))) throw new Error('Clipboard must contain 1–64 local files');
+    for (const file of files) if (!(await fs.stat(file)).isFile()) throw new Error('Clipboard file is not a regular file');
+    await cb.setFiles(files);
+  } else await cb.setText(item.text);
 }
 export async function clipboardDoctor() {
   if (process.platform === 'linux' && !process.env.DISPLAY) return { ok: false, error: 'This build requires an X11 or XWayland display.', hint: 'Choose an X11 desktop session for the demo. A pure Wayland session is not yet supported.' };

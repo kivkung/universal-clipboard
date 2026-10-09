@@ -105,7 +105,7 @@ public final class Smoke extends Instrumentation {
             check(!opened.hasWindowFocus(),"image receive and reconnect stayed in background");
             foreground(c);
             Uri image=c.getSystemService(ClipboardManager.class).getPrimaryClip().getItemAt(0).getUri();
-            check(image!=null&&image.getAuthority().endsWith(".images"),"received image is a clipboard content URI");
+            check(image!=null&&image.getAuthority().endsWith(".history"),"received image is a clipboard content URI");
             try(InputStream input=c.getContentResolver().openInputStream(image)){
                 Bitmap bitmap=android.graphics.BitmapFactory.decodeStream(input);check(bitmap!=null&&bitmap.getWidth()==512&&bitmap.getHeight()==512,"received PNG readable and complete");if(bitmap!=null)bitmap.recycle();
             }
@@ -114,6 +114,16 @@ public final class Smoke extends Instrumentation {
             String paste="";long deadline=SystemClock.elapsedRealtime()+5000;
             while(paste.isEmpty()&&SystemClock.elapsedRealtime()<deadline){try(android.database.Cursor cursor=c.getContentResolver().query(Uri.parse("content://com.kivkung.universalclipboard.test.fixture/paste"),null,null,null,null)){if(cursor!=null&&cursor.moveToFirst())paste=cursor.getString(0);}if(paste.isEmpty())Thread.sleep(100);}
             check("OK 512x512".equals(paste),"separate app can paste image through Android URI grant: "+paste);
+            foreground(c);
+            control.request(Wire.obj("type","test.receive","to",control.hubId,"target",cfg.id,"mode","files"));
+            ClipData files=c.getSystemService(ClipboardManager.class).getPrimaryClip();
+            check(files!=null&&files.getItemCount()==2,"encrypted real Node batch publishes two Android clipboard URIs");
+            byte[][] expectedBytes={new byte[]{0,1,2,(byte)255,0,19},new byte[0]};String[] expectedNames={"interop.bin","empty.dat"};
+            for(int i=0;i<2;i++){
+                Uri u=files.getItemAt(i).getUri();check(u!=null&&u.getAuthority().endsWith(".history"),"Node batch member "+i+" has local content URI");
+                try(InputStream in=c.getContentResolver().openInputStream(u)){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[1024];int n;while((n=in.read(buffer))!=-1)out.write(buffer,0,n);check(Arrays.equals(expectedBytes[i],out.toByteArray()),"Node batch member "+i+" bytes/zero unchanged");}
+                try(android.database.Cursor cursor=c.getContentResolver().query(u,null,null,null,null)){check(cursor!=null&&cursor.moveToFirst()&&expectedNames[i].equals(cursor.getString(cursor.getColumnIndex("_display_name")))&&cursor.getLong(cursor.getColumnIndex("_size"))==expectedBytes[i].length,"Node batch member "+i+" name/size correct");}
+            }
             testReceiverValidation(c);
         }
     }

@@ -19,11 +19,12 @@ Use two physical machines: Windows x64 and Linux x64 glibc in an X11 session. In
 
 ## Verification performed during development
 
-- Windows, Node 22.17.0: 14 tests passed using `node --test --experimental-test-isolation=none`.
+- Windows, Node 22.17.0: current automatic-file build passes 35 tests with `npm test`, including workstation-to-Hub fan-out and echo suppression.
 - Real localhost TCP endpoints, independent identities/storage, injected clipboards.
 - Receiver/sender disconnect, Hub restart, fresh endpoint objects using persisted data, final ACK loss, checksum rejection, traversal, malformed frames, wrong PIN, duplicate identity and revocation.
 - Live service HTTP controls and automatic image/text polling.
-- Native Windows clipboard: Thai/Unicode text and 2x2 PNG roundtrip passed, including stable repeated image reads. Original clipboard restored afterward.
+- Native Windows clipboard: Thai/Unicode text, 2x2 PNG and multiple-file list roundtrip through encrypted TCP passed. Original clipboard restored afterward.
+- Android API 37 emulator: 57 interoperation checks and 27 history/provider/Downloads checks passed; see [HISTORY.md](HISTORY.md) and [Android README](../android/README.md).
 - Native Linux and the physical Windows/Linux checklist still require the demo hardware.
 - Supplied CI workflow has not been run remotely for this change.
 

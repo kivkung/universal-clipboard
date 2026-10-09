@@ -13,7 +13,7 @@ public final class FixtureProvider extends ContentProvider {
     }
     public String getType(Uri uri){return uri.getPath().equals("/file")?"application/octet-stream":"image/png";}
     public ParcelFileDescriptor openFile(Uri uri,String mode)throws FileNotFoundException{return ParcelFileDescriptor.open(new File(getContext().getFilesDir(),uri.getPath().equals("/file")?"fixture.bin":"fixture.png"),ParcelFileDescriptor.MODE_READ_ONLY);}
-    public Cursor query(Uri u,String[] p,String s,String[] a,String sort){if(u.getPath().equals("/file")){android.database.MatrixCursor c=new android.database.MatrixCursor(new String[]{android.provider.OpenableColumns.DISPLAY_NAME});c.addRow(new Object[]{"รายงาน.bin"});return c;}android.database.MatrixCursor c=new android.database.MatrixCursor(new String[]{"result"});c.addRow(new Object[]{getContext().getSharedPreferences("paste",0).getString("result","")});return c;}
+    public Cursor query(Uri u,String[] p,String s,String[] a,String sort){if(u.getPath().equals("/file")){android.database.MatrixCursor c=new android.database.MatrixCursor(new String[]{android.provider.OpenableColumns.DISPLAY_NAME});c.addRow(new Object[]{"รายงาน.bin"});return c;}android.database.MatrixCursor c=new android.database.MatrixCursor(new String[]{"result"});c.addRow(new Object[]{getContext().getSharedPreferences("paste",0).getString(u.getPath().equals("/generic")?"generic":"result","")});return c;}
     public Uri insert(Uri u,ContentValues v){throw new UnsupportedOperationException();}
     public int delete(Uri u,String s,String[] a){throw new UnsupportedOperationException();}
     public int update(Uri u,ContentValues v,String s,String[] a){throw new UnsupportedOperationException();}

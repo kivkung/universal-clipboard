@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { connectInternet } from './internet.js';
 import dgram from 'node:dgram';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -8,18 +9,20 @@ import { EventEmitter } from 'node:events';
 import { deriveKey, proof, equalProof, sessionKey, encryptObject, decryptObject } from './crypto.js';
 import { readFrames, writeFrame, hashText } from './protocol.js';
 import { PROTOCOL, TCP_PORT, DISCOVERY_PORT, CHUNK_SIZE, MAX_FILE_SIZE } from './config.js';
-import { TransferStore, fileHash, safeName } from './transfers.js';
+import { TransferStore, fileHash, safeName, fileMime } from './transfers.js';
+import { decodeImage } from './clipboard.js';
 import { atomicJson } from './state.js';
 import { localIPv4s } from './net.js';
 
 export class Client extends EventEmitter {
-  constructor({ host, port = TCP_PORT, pin, id, name, dir, receiveDir, clipboard, pairing, onPaired = () => {}, retryMs = 1000, requestTimeout = 15000 }) {
+  constructor({ host, url, socketFactory, port = TCP_PORT, pin, id, name, dir, receiveDir, clipboard, history, pairing, onPaired = () => {}, retryMs = 1000, requestTimeout = 15000 }) {
     super();
-    Object.assign(this, { host, port, pin, id, name, dir, clipboard, pairing, onPaired, retryMs, requestTimeout });
+    Object.assign(this, { host, url, socketFactory, port, pin, id, name, dir, clipboard, history, pairing, onPaired, retryMs, requestTimeout });
     this.pending = new Map(); this.ready = false; this.stopped = false; this.paused = false;
     this.sending = new Map(); this.lastHash = null;
+    this.clipboardQueue = Promise.resolve();
     this.jobsDir = path.join(dir, 'outgoing'); fs.mkdirSync(this.jobsDir, { recursive: true, mode: 0o700 });
-    this.store = new TransferStore({ dir, receiveDir, onImage: async file => {
+    this.store = new TransferStore({ dir, receiveDir, storage: history, onComplete: history ? entry => this.receiveTransfer(entry) : undefined, onBatch: history ? batch => this.receiveBatch(batch) : undefined, onImage: async file => {
       if (this.paused) throw new Error('Clipboard sync paused; image saved only');
       await this.applyClipboard({ kind: 'image', path: file });
     } });
@@ -33,7 +36,7 @@ export class Client extends EventEmitter {
   }
   open() {
     return new Promise((resolve, reject) => {
-      const socket = net.createConnection({ host: this.host, port: this.port });
+      const socket = this.socketFactory ? this.socketFactory() : this.url ? connectInternet(this.url) : net.createConnection({ host: this.host, port: this.port });
       this.socket = socket; let key, nonce;
       const timer = setTimeout(() => socket.destroy(new Error('Connection timed out')), 10000);
       const fail = error => { clearTimeout(timer); reject(error); };
@@ -104,11 +107,50 @@ export class Client extends EventEmitter {
       if (body.type.startsWith('file.')) result = await this.store.handle(body, body.from);
       else if (body.type === 'clipboard.text') {
         if (typeof body.text !== 'string' || Buffer.byteLength(body.text) > 512 * 1024 || hashText(body.text) !== body.hash) throw new Error('Invalid clipboard text');
-        if (!this.paused && body.hash !== this.lastHash) await this.applyClipboard({ kind: 'text', text: body.text });
-        result = { applied: !this.paused };
+        if (body.entryId !== undefined && (typeof body.entryId !== 'string' || !/^[a-f0-9]{64}$/.test(body.entryId))) throw new Error('Invalid text entry ID');
+        let historyId;
+        if (this.history) {
+          const entry = await this.history.commit({ kind: 'text', text: body.text }, { sourceId: hashText(body.from + ':text:' + (body.entryId || body.requestId)), sender: { id: body.from, name: body.fromName } });
+          historyId = entry.id;
+          if (!this.paused && !entry.deduplicated) await this.publishHistory(entry.id);
+        } else if (!this.paused && body.hash !== this.lastHash) await this.applyClipboard({ kind: 'text', text: body.text });
+        result = { applied: !this.paused, ...(historyId ? { historyId } : {}) };
       } else throw new Error('Unsupported message');
     } catch (e) { error = e.message; }
     await this.send({ type: 'reply', to: body.from, replyTo: body.requestId, ...(error ? { error } : { result }) });
+  }
+  publishHistory(id, manual = false) {
+    const task = this.clipboardQueue.then(() => this.publishHistoryOnce(id, manual));
+    this.clipboardQueue = task.catch(() => {}); return task;
+  }
+  async publishHistoryOnce(id, manual) {
+    if (this.paused && !manual) throw new Error('Clipboard sync paused; entry saved in history');
+    const item = await this.history.item(id);
+    await this.history.pin(id, 'clipboard-next');
+    let applied = false;
+    try {
+      await this.applyClipboard(item);
+      applied = true;
+      await this.history.pin(id, 'clipboard');
+      await this.history.unpin('clipboard-next');
+    } catch (error) { if (!applied) await this.history.unpin('clipboard-next'); throw error; }
+  }
+  async receiveTransfer(value) {
+    if (value.kind === 'image') decodeImage(await fsp.readFile(value.output));
+    const item = value.kind === 'image' ? { kind: 'image', path: value.output, name: value.name, mime: value.mime }
+      : { kind: 'files', files: [{ path: value.output, name: value.name, mime: value.mime }] };
+    const entry = await this.history.commit(item, { sourceId: hashText(value.sender + ':file:' + value.transferId), sender: { id: value.sender, name: value.senderName } });
+    let clipboardError;
+    if (!entry.deduplicated) { try { await this.publishHistory(entry.id); } catch (error) { clipboardError = error.message; } }
+    this.emit('history', entry);
+    return { historyId: entry.id, ...(clipboardError ? { clipboardError } : {}) };
+  }
+  async receiveBatch(batch) {
+    const entry = await this.history.commit({ kind: 'files', files: batch.members.map(value => ({ path: value.output, name: value.name, mime: value.mime })) }, { sourceId: hashText(batch.sender + ':batch:' + batch.batchId), batchId: batch.batchId, sender: { id: batch.sender, name: batch.senderName } });
+    let clipboardError;
+    if (!entry.deduplicated) { try { await this.publishHistory(entry.id); } catch (error) { clipboardError = error.message; } }
+    this.emit('history', entry);
+    return { historyId: entry.id, ...(clipboardError ? { clipboardError } : {}) };
   }
   async applyClipboard(item) {
     if (!this.clipboard) throw new Error('Clipboard unavailable');
@@ -116,8 +158,8 @@ export class Client extends EventEmitter {
     try {
       await this.clipboard.write(item);
       // Native image encoders can normalize PNG bytes; remember the actual local representation.
-      const current = await this.clipboard.read();
-      this.lastHash = current?.hash ?? (item.kind === 'text' ? hashText(item.text) : null);
+      const current = await this.clipboard.read().catch(() => null);
+      this.lastHash = current?.hash ?? (item.kind === 'text' ? hashText(item.text) : item.kind === 'files' ? hashText(JSON.stringify(item.files)) : null);
       this.emit('clipboard', item.kind);
     } finally { this.applying = false; }
   }
@@ -136,7 +178,8 @@ export class Client extends EventEmitter {
     if (Buffer.byteLength(text) > 512 * 1024) throw new Error('Text exceeds 512 KiB');
     const hash = hashText(text);
     const results = [];
-    for (const peer of await this.recipients(to)) results.push({ id: peer.id, ...await this.request({ type: 'clipboard.text', to: peer.id, text, hash }) });
+    const entryId = crypto.randomBytes(32).toString('hex');
+    for (const peer of await this.recipients(to)) results.push({ id: peer.id, ...await this.request({ type: 'clipboard.text', to: peer.id, text, hash, entryId }) });
     this.lastHash = hash; return results;
   }
   async sendFile(file, to, kind = 'file') {
@@ -147,17 +190,58 @@ export class Client extends EventEmitter {
     const hash = await fileHash(file);
     const results = [];
     for (const peer of await this.recipients(to)) {
-      const job = { file, to: peer.id, name, size: stat.size, hash, kind, transferId: crypto.randomBytes(32).toString('hex') };
+      const job = { file, to: peer.id, name, size: stat.size, hash, kind, mime: kind === 'image' ? 'image/png' : fileMime(name), transferId: crypto.randomBytes(32).toString('hex') };
       atomicJson(path.join(this.jobsDir, job.transferId + '.json'), job);
       try { results.push(await this.runJob(job)); }
       catch (error) { results.push({ to: peer.id, transferId: job.transferId, error: error.message }); }
     }
     return results;
   }
+  async sendFiles(files, to) {
+    if (!Array.isArray(files) || files.length < 1 || files.length > 64) throw new Error('Select 1–64 regular files');
+    const members = [];
+    for (const source of files) {
+      const file = path.resolve(source), stat = await fsp.stat(file), name = safeName(path.basename(file));
+      if (!stat.isFile() || stat.size > MAX_FILE_SIZE) throw new Error('Expected regular files up to 10 GiB; folders are not supported');
+      members.push({ file, name, size: stat.size, hash: await fileHash(file), kind: 'file', mime: fileMime(name), transferId: crypto.randomBytes(32).toString('hex') });
+    }
+    const results = [];
+    for (const peer of await this.recipients(to)) {
+      const job = { batch: true, batchId: crypto.randomBytes(32).toString('hex'), to: peer.id, files: members.map(member => ({ ...member, transferId: crypto.randomBytes(32).toString('hex') })) };
+      atomicJson(path.join(this.jobsDir, job.batchId + '.json'), job);
+      try { results.push(await this.runJob(job)); } catch (error) { results.push({ to: peer.id, batchId: job.batchId, error: error.message }); }
+    }
+    return results;
+  }
   async runJob(job) {
-    if (this.sending.has(job.transferId)) return this.sending.get(job.transferId);
-    const task = this.transfer(job).finally(() => this.sending.delete(job.transferId));
-    this.sending.set(job.transferId, task); return task;
+    const id = job.batch ? job.batchId : job.transferId;
+    if (this.sending.has(id)) return this.sending.get(id);
+    const task = (job.batch ? this.transferBatch(job) : this.transfer(job)).finally(() => this.sending.delete(id));
+    this.sending.set(id, task); return task;
+  }
+  async transferBatch(job) {
+    const deadline = Date.now() + 5 * 60_000;
+    const manifest = job.files.map(({ file, ...metadata }) => metadata);
+    while (!this.stopped) {
+      try {
+        const offered = await this.request({ type: 'file.batch.offer', to: job.to, batchId: job.batchId, count: manifest.length, files: manifest });
+        if (offered.complete) { fs.rmSync(path.join(this.jobsDir, job.batchId + '.json'), { force: true }); return { ...offered, to: job.to, batchId: job.batchId }; }
+        const members = [];
+        for (const [index, member] of job.files.entries()) {
+          if (await fileHash(member.file) !== member.hash) throw new Error('Source file changed: ' + member.file);
+          members.push(await this.transfer({ ...member, to: job.to, batchId: job.batchId, index }));
+        }
+        const result = await this.request({ type: 'file.batch.finish', to: job.to, batchId: job.batchId });
+        if (!result.complete) throw new Error('Receiver did not confirm batch completion');
+        fs.rmSync(path.join(this.jobsDir, job.batchId + '.json'), { force: true });
+        return { ...result, to: job.to, batchId: job.batchId, files: members };
+      } catch (error) {
+        if (!error.retryable || this.fatal || Date.now() > deadline || this.stopped) throw error;
+        this.emit('retry', { name: 'File batch', message: error.message });
+        await new Promise(resolve => setTimeout(resolve, this.retryMs));
+      }
+    }
+    throw new Error('Stopped; batch saved for uc resume');
   }
   async transfer(job) {
     const deadline = Date.now() + 5 * 60_000;
@@ -168,7 +252,7 @@ export class Client extends EventEmitter {
         if (!this.ready) throw Object.assign(new Error('Disconnected'), { retryable: true });
         const offered = await this.request({ ...job, file: undefined, type: 'file.offer' });
         if (offered.complete) {
-          fs.rmSync(path.join(this.jobsDir, job.transferId + '.json'), { force: true });
+          if (!job.batchId) fs.rmSync(path.join(this.jobsDir, job.transferId + '.json'), { force: true });
           return { ...offered, to: job.to, resumedBytes: job.size };
         }
         let offset = offered.offset;
@@ -190,7 +274,7 @@ export class Client extends EventEmitter {
         } finally { await file.close(); }
         const result = await this.request({ type: 'file.finish', transferId: job.transferId, to: job.to });
         if (!result.complete) throw new Error('Receiver did not confirm completion');
-        fs.rmSync(path.join(this.jobsDir, job.transferId + '.json'), { force: true });
+        if (!job.batchId) fs.rmSync(path.join(this.jobsDir, job.transferId + '.json'), { force: true });
         this.emit('sent', { name: job.name, to: job.to });
         return { ...result, to: job.to, resumedBytes: resumed };
       } catch (error) {
@@ -208,18 +292,18 @@ export class Client extends EventEmitter {
     const results = [];
     for (const job of this.jobs()) {
       try {
-        if (await fileHash(job.file) !== job.hash) throw new Error('Source file changed: ' + job.file);
+        for (const member of job.batch ? job.files : [job]) if (await fileHash(member.file) !== member.hash) throw new Error('Source file changed: ' + member.file);
         results.push(await this.runJob(job));
-      } catch (error) { results.push({ to: job.to, transferId: job.transferId, error: error.message }); }
+      } catch (error) { results.push({ to: job.to, ...(job.batch ? { batchId: job.batchId } : { transferId: job.transferId }), error: error.message }); }
     }
     return results;
   }
   async cancel(id) {
-    const job = this.jobs().find(j => j.transferId === id);
+    const job = this.jobs().find(j => (j.batch ? j.batchId : j.transferId) === id);
     if (!job) throw new Error('Unknown outgoing transfer');
     if (this.sending.has(id)) throw new Error('Wait for the active transfer to finish or stop the process before cancelling');
     let remoteCleanupPending = false;
-    try { await this.request({ type: 'file.cancel', to: job.to, transferId: id }); }
+    try { await this.request(job.batch ? { type: 'file.batch.cancel', to: job.to, batchId: id } : { type: 'file.cancel', to: job.to, transferId: id }); }
     catch (error) { if (!error.retryable) throw error; remoteCleanupPending = true; }
     fs.rmSync(path.join(this.jobsDir, id + '.json'), { force: true });
     return { cancelled: true, remoteCleanupPending };

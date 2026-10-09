@@ -4,6 +4,8 @@ data/*.json
 .DS_Store
 .test-*/
 *.tgz
+releases/**/*.apk
+releases/**/*.idsig
 android/build/
 android/*.jks
 build

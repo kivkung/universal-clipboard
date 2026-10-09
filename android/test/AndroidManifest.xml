@@ -2,7 +2,10 @@
   <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
   <application android:label="UVC Tests" android:debuggable="true" android:testOnly="true">
     <activity android:name="com.kivkung.universalclipboard.PasteActivity" android:exported="true" />
+    <activity android:name="com.kivkung.universalclipboard.GenericReadActivity" android:exported="true" />
     <provider android:name="com.kivkung.universalclipboard.FixtureProvider" android:authorities="com.kivkung.universalclipboard.test.fixture" android:exported="true" android:grantUriPermissions="true" />
   </application>
+  <instrumentation android:name="com.kivkung.universalclipboard.InternetSmoke" android:targetPackage="com.kivkung.universalclipboard" android:label="UVC Internet tests" />
+  <instrumentation android:name="com.kivkung.universalclipboard.HistorySmoke" android:targetPackage="com.kivkung.universalclipboard" android:label="UVC history tests" />
   <instrumentation android:name="com.kivkung.universalclipboard.Smoke" android:targetPackage="com.kivkung.universalclipboard" android:label="UVC smoke tests" />
 </manifest>

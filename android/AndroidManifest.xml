@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.kivkung.universalclipboard" android:versionCode="5" android:versionName="0.4.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.kivkung.universalclipboard" android:versionCode="7" android:versionName="0.5.0">
   <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.CAMERA" />
@@ -15,6 +15,8 @@
     </activity>
     <activity android:name=".SendActivity" android:exported="false" android:theme="@style/SendTheme" android:excludeFromRecents="true" android:taskAffinity="com.kivkung.universalclipboard.send" />
     <activity android:name=".ScanActivity" android:exported="false" android:screenOrientation="portrait" />
+    <activity android:name=".HistoryActivity" android:exported="false" />
+    <provider android:name=".HistoryProvider" android:authorities="com.kivkung.universalclipboard.history" android:exported="false" android:grantUriPermissions="true" />
     <service android:name=".ClipboardService" android:exported="false" android:foregroundServiceType="connectedDevice" />
     <receiver android:name=".StopReceiver" android:exported="false" />
     <provider android:name=".ImageProvider" android:authorities="com.kivkung.universalclipboard.images" android:exported="false" android:grantUriPermissions="true" />
