@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Hub } from './hub.js';
 import { Client } from './client.js';
+import { relayReceivedFiles } from './relay.js';
 import { readClipboard, writeClipboard } from './clipboard.js';
 import { dataDirectory, deviceId, loadState, saveState, atomicJson } from './state.js';
 import { localIPv4s } from './net.js';
@@ -68,6 +69,7 @@ export async function startService({ dir = dataDirectory(), clipboard = { read: 
     }
     endpoint = new Client({ url: hub ? undefined : state.hub.url, host: hub ? '127.0.0.1' : state.hub.host, port: hub ? hub.port : state.hub.port, pin: state.pin, pairing: hub ? undefined : state.pairing, onPaired: pairing => { state.pairing = pairing; save(state); }, id, name: state.name, dir, receiveDir: state.receiveDir, clipboard, history });
     await endpoint.store.ready;
+    if (hub) relayReceivedFiles(endpoint, dir, log);
     endpoint.paused = !!state.paused;
     endpoint.on('connected', () => log('Connected. Clipboard sync ' + (endpoint.paused ? 'paused.' : 'ready.')));
     endpoint.on('disconnected', () => { if (!closing) log('Disconnected; reconnecting automatically unless access was rejected.'); });

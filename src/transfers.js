@@ -80,6 +80,8 @@ export class TransferStore {
     const file = this.batchPath(message.batchId, sender), token = path.basename(file);
     let state = this.load(file);
     if (message.type === 'file.batch.offer') {
+      if (message.distribute !== undefined && typeof message.distribute !== 'boolean') throw new Error('Invalid distribution flag');
+      if (state && state.distribute !== message.distribute) throw new Error('Batch distribution changed');
       if (!Array.isArray(message.files) || message.files.length < 1 || message.files.length > 64 || message.count !== message.files.length) throw new Error('Batch requires 1–64 files and matching count');
       const files = message.files.map(item => {
         if (!item || !validHash(item.transferId)) throw new Error('Invalid batch transfer ID');
@@ -94,7 +96,7 @@ export class TransferStore {
         const pending = fs.readdirSync(this.dir).filter(name => name.startsWith('batch-') && name.endsWith('.json')).map(name => this.load(path.join(this.dir, name))).filter(value => !value.complete && !value.cancelled);
         if (pending.length >= 8) throw new Error('Too many unfinished batches; cancel old batches first');
         await this.storage?.reserveIncoming(files.reduce((sum, item) => sum + item.size, 0) * 2, token);
-        state = { batch: true, batchId: message.batchId, sender, senderName: message.fromName, files, updated: Date.now() };
+        state = { distribute: message.distribute, batch: true, batchId: message.batchId, sender, senderName: message.fromName, files, updated: Date.now() };
         atomicJson(file, state);
       }
       return { complete: !!state.complete, ...(state.result || {}) };
@@ -143,6 +145,8 @@ export class TransferStore {
     const p = this.paths(id, sender);
     let state = fs.existsSync(p.meta) ? JSON.parse(fs.readFileSync(p.meta, 'utf8')) : null;
     if (message.type === 'file.offer') {
+      if (message.distribute !== undefined && typeof message.distribute !== 'boolean') throw new Error('Invalid distribution flag');
+      if (state && state.distribute !== message.distribute) throw new Error('Transfer distribution changed');
       const { name, size, hash, kind, mime } = metadata(message);
       if (message.batchId) {
         const batch = validHash(message.batchId) && this.load(this.batchPath(message.batchId, sender));
@@ -154,7 +158,7 @@ export class TransferStore {
         const partials = fs.readdirSync(this.dir).filter(x => x.endsWith('.part'));
         if (partials.length >= 32) throw new Error('Too many unfinished transfers; cancel old transfers first');
         if (!message.batchId) await this.storage?.reserveIncoming(size * 2, path.basename(p.meta));
-        state = { name, size, hash, kind, mime, sender, senderName: message.fromName, ...(message.batchId ? { batchId: message.batchId, index: message.index } : {}), updated: Date.now() };
+        state = { distribute: message.distribute, name, size, hash, kind, mime, sender, senderName: message.fromName, ...(message.batchId ? { batchId: message.batchId, index: message.index } : {}), updated: Date.now() };
         // A crash between creating the part and its metadata leaves an orphan.
         if (fs.existsSync(p.part)) fs.unlinkSync(p.part);
         fs.writeFileSync(p.part, Buffer.alloc(0), { flag: 'wx', mode: 0o600 });

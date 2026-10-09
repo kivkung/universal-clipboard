@@ -2,7 +2,6 @@
 {
   "name": "universal-clipboard-lan",
   "version": "0.5.0",
-  "private": true,
   "type": "module",
   "description": "Terminal-first local universal clipboard over a LAN",
   "main": "src/cli.js",

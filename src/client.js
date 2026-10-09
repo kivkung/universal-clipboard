@@ -143,6 +143,7 @@ export class Client extends EventEmitter {
     let clipboardError;
     if (!entry.deduplicated) { try { await this.publishHistory(entry.id); } catch (error) { clipboardError = error.message; } }
     this.emit('history', entry);
+    this.emit('received-files', value);
     return { historyId: entry.id, ...(clipboardError ? { clipboardError } : {}) };
   }
   async receiveBatch(batch) {
@@ -150,6 +151,7 @@ export class Client extends EventEmitter {
     let clipboardError;
     if (!entry.deduplicated) { try { await this.publishHistory(entry.id); } catch (error) { clipboardError = error.message; } }
     this.emit('history', entry);
+    this.emit('received-files', batch);
     return { historyId: entry.id, ...(clipboardError ? { clipboardError } : {}) };
   }
   async applyClipboard(item) {
@@ -190,7 +192,7 @@ export class Client extends EventEmitter {
     const hash = await fileHash(file);
     const results = [];
     for (const peer of await this.recipients(to)) {
-      const job = { file, to: peer.id, name, size: stat.size, hash, kind, mime: kind === 'image' ? 'image/png' : fileMime(name), transferId: crypto.randomBytes(32).toString('hex') };
+      const job = { distribute: !!to && to !== 'all', file, to: peer.id, name, size: stat.size, hash, kind, mime: kind === 'image' ? 'image/png' : fileMime(name), transferId: crypto.randomBytes(32).toString('hex') };
       atomicJson(path.join(this.jobsDir, job.transferId + '.json'), job);
       try { results.push(await this.runJob(job)); }
       catch (error) { results.push({ to: peer.id, transferId: job.transferId, error: error.message }); }
@@ -207,7 +209,7 @@ export class Client extends EventEmitter {
     }
     const results = [];
     for (const peer of await this.recipients(to)) {
-      const job = { batch: true, batchId: crypto.randomBytes(32).toString('hex'), to: peer.id, files: members.map(member => ({ ...member, transferId: crypto.randomBytes(32).toString('hex') })) };
+      const job = { distribute: !!to && to !== 'all', batch: true, batchId: crypto.randomBytes(32).toString('hex'), to: peer.id, files: members.map(member => ({ ...member, transferId: crypto.randomBytes(32).toString('hex') })) };
       atomicJson(path.join(this.jobsDir, job.batchId + '.json'), job);
       try { results.push(await this.runJob(job)); } catch (error) { results.push({ to: peer.id, batchId: job.batchId, error: error.message }); }
     }
@@ -224,7 +226,7 @@ export class Client extends EventEmitter {
     const manifest = job.files.map(({ file, ...metadata }) => metadata);
     while (!this.stopped) {
       try {
-        const offered = await this.request({ type: 'file.batch.offer', to: job.to, batchId: job.batchId, count: manifest.length, files: manifest });
+        const offered = await this.request({ type: 'file.batch.offer', to: job.to, batchId: job.batchId, count: manifest.length, distribute: job.distribute, files: manifest });
         if (offered.complete) { fs.rmSync(path.join(this.jobsDir, job.batchId + '.json'), { force: true }); return { ...offered, to: job.to, batchId: job.batchId }; }
         const members = [];
         for (const [index, member] of job.files.entries()) {

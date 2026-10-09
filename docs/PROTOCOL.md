@@ -154,3 +154,8 @@ Use full PNG byte SHA-256 for transfer integrity. For local image echo suppressi
 - src/transfers.js: receiving
 - test/core.test.js: real TCP/resume/tampering tests
 - docs/crypto-vector.json: deterministic test-only crypto values for Android
+
+
+### Host file redistribution
+
+After a verified single file/image or complete batch is committed, Host forwards it to other currently connected devices, excluding itself and the authenticated source. An optional boolean `distribute` on `file.offer` / `file.batch.offer` defaults to forwarding when omitted (Android compatibility). Desktop all-target sends and Host relay jobs set it to false to prevent duplicate deliveries. A targeted send to Host is redistributed; a targeted send to another client remains targeted. Batch members are forwarded together after batch completion. Host receipt ACK confirms local acceptance, not delivery to every peer. Durable relay tasks and outgoing jobs preserve pending work; failed outgoing transfers can be continued with `uc resume`. Devices offline before target selection are not queued. Original filenames and MIME types are preserved, and deterministic relay IDs make receipt retries idempotent.

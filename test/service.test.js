@@ -56,3 +56,51 @@ test('service controls live Hub, watches image/text, reconnects and rejects untr
   });
   assert.equal(status, 403);
 });
+
+
+test('Host forwards direct files and batches once, excludes source and does not duplicate all-target sends', { timeout: 20000 }, async t => {
+  const root = fs.mkdtempSync(path.resolve('.test-relay-'));
+  const services = [];
+  t.after(async () => { for (const service of services.reverse()) await service.close(); await sleep(100); fs.rmSync(root, { recursive: true, force: true }); });
+  const hostDir = path.join(root, 'host');
+  saveState({ deviceId: 'relay-host', name: 'Host', role: 'hub', port: 0, pin: '123456', receiveDir: path.join(hostDir, 'received') }, hostDir);
+  const host = await startService({ dir: hostDir, clipboard: memory(), log: () => {}, discoveryPort: false }); services.push(host);
+  for (const id of ['origin', 'recipient']) {
+    const dir = path.join(root, id);
+    saveState({ deviceId: 'relay-' + id, name: id, role: 'client', pin: '123456', hub: { host: '127.0.0.1', port: host.hub.port }, receiveDir: path.join(dir, 'received') }, dir);
+    services.push(await startService({ dir, clipboard: memory(), log: () => {} }));
+  }
+  const origin = services[1].endpoint, recipient = services[2].endpoint;
+  const one = path.join(root, 'one.bin'), empty = path.join(root, 'empty.txt');
+  fs.writeFileSync(one, Buffer.from([0, 255, 42])); fs.writeFileSync(empty, '');
+  const [sent] = await origin.sendFile(one, host.endpoint.id);
+  assert.equal(sent.error, undefined);
+  await until(() => fs.existsSync(path.join(root, 'recipient', 'received', 'one.bin')));
+  assert.equal(await fileHash(path.join(root, 'recipient', 'received', 'one.bin')), await fileHash(one));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'origin', 'received')), []);
+  await until(async () => (await recipient.history.list()).length === 1);
+  const before = (await recipient.history.list()).length;
+  const [batch] = await origin.sendFiles([one, empty], host.endpoint.id);
+  assert.equal(batch.error, undefined);
+  await until(async () => (await recipient.history.list()).length === before + 1);
+  assert.ok(fs.existsSync(path.join(root, 'recipient', 'received', 'empty.txt')));
+  await origin.request({ type: 'file.batch.finish', to: host.endpoint.id, batchId: batch.batchId });
+  await sleep(200);
+  assert.equal((await recipient.history.list()).length, before + 1);
+  await origin.sendFiles([empty], 'all');
+  await sleep(300);
+  assert.equal((await recipient.history.list()).length, before + 2);
+  assert.equal((await origin.history.list()).length, 0);
+  // Android/older senders omit the optional flag entirely.
+  const image = path.join(root, 'android.png');
+  fs.writeFileSync(image, PNG.sync.write(new PNG({ width: 1, height: 1 })));
+  const transferId = crypto.randomBytes(32).toString('hex');
+  const job = { file: image, to: host.endpoint.id, transferId, name: 'android.png', size: fs.statSync(image).size, hash: await fileHash(image), kind: 'image', mime: 'image/png' };
+  await origin.runJob(job);
+  await until(async () => (await recipient.history.list()).length === before + 3);
+  await origin.request({ type: 'file.finish', to: host.endpoint.id, transferId });
+  await sleep(150);
+  assert.equal((await recipient.history.list()).length, before + 3);
+  assert.equal((await origin.history.list()).length, 0);
+
+});
