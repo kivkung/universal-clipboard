@@ -2,6 +2,7 @@
 
 | Document | Purpose |
 | --- | --- |
+| [คู่มือใช้งานภาษาไทย](USER-GUIDE-TH.md) | Installation, pairing, transfers, history and troubleshooting |
 | [DEMO.md](DEMO.md) | Demo and verification checklist |
 | [HISTORY.md](HISTORY.md) | Received history, automatic files and storage policies |
 | [PROTOCOL.md](PROTOCOL.md) | UCP/2 wire contract |
