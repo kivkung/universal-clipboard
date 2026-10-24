@@ -34,6 +34,7 @@ host.handle=async b=>{
       const invite=hub.createInvitation('10.0.2.2'),uri=inviteUri(invite);
       result={uri,png:(await QRCode.toBuffer(uri,{width:700,margin:4})).toString('base64')};
     }else if(b.mode==='text')result=await host.push('รับจาก Host อัตโนมัติ ✓',b.target);
+    else if(b.mode==='read'){const item=await host.clipboard.read();result={text:item&&item.text?item.text:null};}
     else if(b.mode==='other'){
       let rejected=false;try{await other.push('must not be applied',b.target);}catch{rejected=true;}result={rejected};
     }else if(b.mode==='bad-hash'){

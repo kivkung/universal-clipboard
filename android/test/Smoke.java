@@ -79,10 +79,46 @@ public final class Smoke extends Instrumentation {
         runOnMainSync(()->fileActivity.getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newUri(fileActivity.getContentResolver(),"file",Uri.parse("content://com.kivkung.universalclipboard.test.fixture/file"))));
         Thread.sleep(250);runOnMainSync(()->fileActivity.startActivity(new Intent(fileActivity,SendActivity.class)));waitBusy();waitStatus("ไฟล์อยู่ในโฟลเดอร์รับ",20000);
         check(Jobs.load(c)==null,"generic content URI sent as binary file and job cleared");
+        shareTests(c,cfg);
         receiveTests(c,cfg,activity);
         shell("cmd statusbar expand-notifications");Thread.sleep(1000);screenshot("notification.png");
         shell("cmd statusbar collapse");
         check(true,"settings and notification screenshots captured");
+    }
+    void shareTests(Context c,Config cfg)throws Exception{
+        // Share sheet target: ACTION_SEND goes straight to the Host without a clipboard copy.
+        runOnMainSync(()->c.getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("stale","ค่าเดิมใน clipboard ต้องไม่ถูกส่ง")));
+        Intent shareText=new Intent(Intent.ACTION_SEND);
+        shareText.setPackage("com.kivkung.universalclipboard");shareText.setType("text/plain");shareText.putExtra(Intent.EXTRA_TEXT,"แชร์ตรงจากแอปอื่น ข้าม clipboard");
+        shareText.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        runOnMainSync(()->c.startActivity(shareText));
+        waitBusy();waitStatus("ส่งสำเร็จ",15000);
+        check(Jobs.load(c)==null,"share sheet text sends without reading the clipboard");
+        try(Wire control=new Wire()){
+            control.connect("127.0.0.1",33030,"123456","android-share-control","Share control");
+            JSONObject echo=control.request(Wire.obj("type","test.receive","to",control.hubId,"target",cfg.id,"mode","read")).getJSONObject("value");
+            check("แชร์ตรงจากแอปอื่น ข้าม clipboard".contentEquals(echo.optString("text")),"share sheet text delivered to Host, not the stale clipboard: "+echo.optString("text"));
+        }
+        Intent shareImage=new Intent(Intent.ACTION_SEND);
+        shareImage.setPackage("com.kivkung.universalclipboard");shareImage.setType("image/png");
+        shareImage.putExtra(Intent.EXTRA_STREAM,Uri.parse("content://com.kivkung.universalclipboard.test.fixture/image"));
+        shareImage.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        runOnMainSync(()->c.startActivity(shareImage));
+        waitBusy();waitStatus("ส่งสำเร็จ",20000);
+        check(Jobs.load(c)==null,"share sheet image URI captured via temporary read grant");
+        Intent shareFile=new Intent(Intent.ACTION_SEND);
+        shareFile.setPackage("com.kivkung.universalclipboard");shareFile.setType("application/octet-stream");
+        shareFile.putExtra(Intent.EXTRA_STREAM,Uri.parse("content://com.kivkung.universalclipboard.test.fixture/file"));
+        shareFile.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        runOnMainSync(()->c.startActivity(shareFile));
+        waitBusy();waitStatus("ไฟล์อยู่ในโฟลเดอร์รับ",20000);
+        check(Jobs.load(c)==null,"share sheet generic file sent as binary file");
+        Intent shareEmpty=new Intent(Intent.ACTION_SEND);
+        shareEmpty.setPackage("com.kivkung.universalclipboard");shareEmpty.setType("text/plain");
+        shareEmpty.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        runOnMainSync(()->c.startActivity(shareEmpty));
+        Thread.sleep(1500);
+        check(!ClipboardService.busy&&Jobs.load(c)==null,"empty share intent rejected without starting a transfer");
     }
     void receiveTests(Context c,Config cfg,MainActivity activity)throws Exception{
         try(Wire control=new Wire()){

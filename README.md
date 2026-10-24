@@ -1,4 +1,4 @@
-# Universal Clipboard LAN — Release 0.5.0
+# Universal Clipboard LAN — Release 0.6.0
 
 ## โครงสร้างโปรเจกต์
 
@@ -28,8 +28,12 @@ Build ทั้ง desktop/APK จาก root ของ repo บน Windows:
 npm run build:release
 ```
 
-ผลอยู่ใน `releases/0.5.0/` ใช้เวอร์ชันจาก `package.json` และตรวจให้ตรงกับ Android/lockfile
-ติดตั้งไฟล์จาก checkout ด้วย `npm install -g ./releases/0.5.0/universal-clipboard-lan-0.5.0.tgz`
+ผลอยู่ใน `releases/0.6.0/` ใช้เวอร์ชันจาก `package.json` และตรวจให้ตรงกับ Android/lockfile
+ติดตั้งไฟล์จาก checkout ด้วย `npm install -g ./releases/0.6.0/universal-clipboard-lan-0.6.0.tgz`
+
+## Android Share Intent (0.6.0)
+
+แอนดรอยด์กด Share ในแอปอื่น เลือก "ส่งขึ้น Host" แล้วระบบส่งข้อความ/รูป/ไฟล์ขึ้น Hub อัตโนมัติ ไม่ต้องคัดลอกลง clipboard ก่อน ดู [เอกสารส่งต่อ share intent](docs/handoffs/SHARE-INTENT-HANDOFF.md)
 
 ## Local + Internet (0.5.0)
 
@@ -41,10 +45,10 @@ Android APK พร้อมซอร์สอยู่ใน `android/` ใช�
 
 ## ติดตั้งง่าย
 
-ติดตั้ง Node.js 22 ขึ้นไป แล้วรับไฟล์ `universal-clipboard-lan-0.5.0.tgz` จากผู้ดูแล:
+ติดตั้ง Node.js 22 ขึ้นไป แล้วรับไฟล์ `universal-clipboard-lan-0.6.0.tgz` จากผู้ดูแล:
 
 ```sh
-npm install -g ./universal-clipboard-lan-0.5.0.tgz
+npm install -g ./universal-clipboard-lan-0.6.0.tgz
 uc setup
 ```
 
@@ -88,6 +92,7 @@ Hub ใช้ TCP 3000 และ UDP 3001 สำหรับค้นหา ถ�
 ## ฟีเจอร์
 
 - ข้อความ/URL สองทิศทาง หลายเครื่อง ป้องกันส่งวน
+- Android: กด Share จากแอปอื่นเลือก "ส่งขึ้น Host" ส่งข้อความ/รูป/ไฟล์ขึ้น Hub ทันทีโดยไม่ต้องคัดลอก
 - รูปจาก clipboard จริง เช่น screenshot หรือ Copy image ส่งเป็น PNG แล้วใส่ clipboard ผู้รับ
 - ส่งไฟล์จากทุกเครื่อง รวมถึง Hub และหลายไฟล์ต่อคำสั่ง
 - เลือกผู้รับด้วย ID หรือชื่อที่ไม่ซ้ำ; ค่าเริ่มต้นทุกเครื่องที่ออนไลน์

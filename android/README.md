@@ -1,4 +1,8 @@
-# Universal Clipboard Android 0.5.0 release
+# Universal Clipboard Android 0.6.0 release
+
+## Share sheet sending (0.6.0)
+
+The Android share sheet can now send to the Host directly. In any app tap Share and choose “ส่งขึน Host”: shared text/URLs, images and generic files are delivered to the authenticated Host immediately without copying to the phone clipboard. One item at a time, same limits as SEND; the shared content URI is copied into private storage before the share Activity closes, so resume keeps working after the temporary read grant expires. Sharing while another transfer is running shows the existing busy notification. ACTION_SEND_MULTIPLE is not supported. See [handoff](../docs/handoffs/SHARE-INTENT-HANDOFF.md).
 
 ## Internet transport (0.5.0)
 
@@ -8,17 +12,17 @@ Native Android application (Java), Android 10+ / target API 35. No Node, Termux,
 
 ## Use
 
-1. Install the signed `../releases/0.5.0/universal-clipboard-0.5.0.apk` on a test phone. A different signing key cannot update the old APK; preserve existing data and use the original key when authorized.
-2. Run desktop UCP/2 Host 0.5.0 for QR pairing. Keep its terminal running. PIN pairing remains compatible with older UCP/2 Hosts.
+1. Install the signed `../releases/0.6.0/universal-clipboard-0.6.0.apk` on a test phone. A different signing key cannot update the old APK; preserve existing data and use the original key when authorized.
+2. Run desktop UCP/2 Host 0.5.0+ for QR pairing. Keep its terminal running. PIN pairing remains compatible with older UCP/2 Hosts.
 3. Enter Host IPv4, its six-digit PIN, and the phone's device name. Port defaults to 3000; expand advanced settings only for a custom port.
 4. Tap Join Host and allow notifications. Settings persist; the PIN is encrypted with Android Keystore and excluded from backups.
-5. Copy text or an image, open notifications, tap SEND. A focused Activity captures a snapshot and closes itself; no second confirmation.
+5. Copy text or an image, open notifications, tap SEND. A focused Activity captures a snapshot and closes itself; no second confirmation. Or use any app's Share sheet and pick "ส่งขึ้น Host" (0.6.0) to send without copying.
 6. Notification progress remains visible for at least one second; success requires the Host's application acknowledgement. Image progress stays below 100% until verification/application completes.
 7. STOP closes sockets, stops the foreground service, removes application tasks and terminates the application's own process. Nothing restarts automatically. Open the app and tap Join Host to use it again.
 
 Host startup displays a QR automatically. Alternatively run `uc qr` in a second Host terminal, then tap **Scan QR**. Scanning only fills the form; review the IP/port/name and tap **เชื่อมต่อ · Join Host** to connect. No settings are saved and no new connection is started by scanning. Camera permission is requested only for scanning; selected QR images and pasted invitation text are supported. Join uses a two-minute one-use invitation and saves an encrypted per-device credential. No permanent group PIN is in the QR. Future joins use the saved credential. Re-scanning a fresh invitation for the same device replaces its credential after successful authentication; revoked IDs remain blocked.
 
-Generic clipboard content URIs with readable grants can now be sent as files with SEND: one file at a time, up to 256 MiB and available private storage. They are copied into private storage before transfer for durable resume. Generic files are saved by the Host, not written to its clipboard. Copying a filename as text does not send the file. Multi-item clipboard selections are rejected explicitly. Folders and file-picker/share-sheet flows are not added in this phase.
+Generic clipboard content URIs with readable grants can now be sent as files with SEND: one file at a time, up to 256 MiB and available private storage. They are copied into private storage before transfer for durable resume. Generic files are saved by the Host, not written to its clipboard. Copying a filename as text does not send the file. Multi-item clipboard selections are rejected explicitly. Folders and file-picker flows are still not added; the system share sheet is supported (see 0.6.0 section above).
 
 The Host endpoint is selected from the authenticated connection's hub identity, not by name and not by broadcast. Android sends to the Host and now receives text and PNG clipboard images automatically from that same authenticated Host. Receiving writes the clipboard while the app is unfocused; it does not open an Activity or read the existing clipboard. Continuous background clipboard monitoring is not implemented.
 
@@ -43,13 +47,14 @@ Requirements: JDK 21, Android SDK platform android-36.1 and Build Tools 36.0.0, 
 
 The script also detects default Android Studio and cached Bouncy Castle locations. Dependency: https://repo.maven.apache.org/maven2/org/bouncycastle/bcprov-jdk18on/1.79/
 
-Output: `../releases/0.5.0/universal-clipboard-0.5.0.apk` (versionCode 7). The build rejects mismatched Android/desktop release versions. A local `demo-signing.jks` is created on first build and excluded from Git/source exports. Keep it privately to sign compatible updates. Its demo password is `android`; this is not a production release key. The manifest is not debuggable. ZXing core 3.5.3 is pinned under vendor; its SHA-256 is verified by the build script. Required compression assemblies are loaded explicitly for Windows PowerShell.
+Output: `../releases/0.6.0/universal-clipboard-0.6.0.apk` (versionCode 8). The build rejects mismatched Android/desktop release versions. A local `demo-signing.jks` is created on first build and excluded from Git/source exports. Keep it privately to sign compatible updates. Its demo password is `android`; this is not a production release key. The manifest is not debuggable. ZXing core 3.5.3 is pinned under vendor; its SHA-256 is verified by the build script. Required compression assemblies are loaded explicitly for Windows PowerShell.
 
 ## Source map
 
 - `MainActivity.java`: setup, notification permission, Join, manual send, stop and discard-pending controls.
 - `Config.java`: device identity and Keystore-encrypted saved PIN.
 - `SendActivity.java`: focused clipboard capture; returns to the previous screen.
+- `ShareActivity.java`: Android share sheet entry point (ACTION_SEND); captures the shared text/URI into the pending job without reading the clipboard.
 - `Jobs.java`: bounded image decode/PNG conversion and atomic private job persistence.
 - `ClipboardService.java`: connected-device foreground service, reconnect loop, notifications and minimum progress duration.
 - `Wire.java`: UCP/2 framing, scrypt, mutually checked PIN proof, AES-GCM and sequence checks. A dedicated reader handles incoming messages continuously while request replies are matched by ID and sender.

@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.kivkung.universalclipboard" android:versionCode="7" android:versionName="0.5.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.kivkung.universalclipboard" android:versionCode="8" android:versionName="0.6.0">
   <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.CAMERA" />
@@ -14,6 +14,13 @@
       <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
     </activity>
     <activity android:name=".SendActivity" android:exported="false" android:theme="@style/SendTheme" android:excludeFromRecents="true" android:taskAffinity="com.kivkung.universalclipboard.send" />
+    <activity android:name=".ShareActivity" android:exported="true" android:label="ส่งขึ้น Host" android:theme="@style/SendTheme" android:excludeFromRecents="true" android:taskAffinity="com.kivkung.universalclipboard.send">
+      <intent-filter android:label="ส่งขึ้น Host">
+        <action android:name="android.intent.action.SEND" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="*/*" />
+      </intent-filter>
+    </activity>
     <activity android:name=".ScanActivity" android:exported="false" android:screenOrientation="portrait" />
     <activity android:name=".HistoryActivity" android:exported="false" />
     <provider android:name=".HistoryProvider" android:authorities="com.kivkung.universalclipboard.history" android:exported="false" android:grantUriPermissions="true" />

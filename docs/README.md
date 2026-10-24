@@ -8,6 +8,7 @@
 | [PHASE-1-3.md](PHASE-1-3.md) | Earlier feature implementation and study guide |
 | [Internet handoff](handoffs/INTERNET-TUNNEL-HANDOFF.md) | Internet setup, verification and remaining limitations |
 | [History handoff](handoffs/CLIPBOARD-HISTORY-HANDOFF.md) | Original approved history scope |
+| [Share intent handoff](handoffs/SHARE-INTENT-HANDOFF.md) | Android share sheet sending, verification and limitations |
 
 Handoff documents preserve decisions and historical evidence. Current user
 instructions and current source take precedence over earlier handoff text.
