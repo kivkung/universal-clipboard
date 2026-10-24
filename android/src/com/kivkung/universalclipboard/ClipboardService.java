@@ -48,7 +48,7 @@ public final class ClipboardService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent==null){stopSelf();return START_NOT_STICKY;}
         String action=intent.getAction();
-        if(PREPARE.equals(action)){begin();update("กำลังอ่าน clipboard…",-1,true);}
+        if(PREPARE.equals(action)){String label=intent.getStringExtra("label");begin();update(label!=null?label:"กำลังอ่าน clipboard…",-1,true);}
         if(FAIL.equals(action)){capturing.set(false);finish(intent.getStringExtra("error"),false);}
         if(JOIN.equals(action))worker.execute(()->{
             disconnect();fatal=false;

@@ -26,13 +26,16 @@ final class Jobs {
     static JSONObject capture(Context c,ClipData clip,Config cfg)throws Exception {
         if(clip==null||clip.getItemCount()==0)throw new Exception("Clipboard ว่าง — คัดลอกข้อความหรือรูปก่อน");
         if(clip.getItemCount()!=1)throw new Exception("มือถือส่งไฟล์ได้ครั้งละหนึ่งรายการ กรุณา Copy ใหม่");
-        ClipData.Item item=clip.getItemAt(0);Uri uri=item.getUri();
+        ClipData.Item item=clip.getItemAt(0);
+        return capture(c,item.getText(),item.getUri(),clip.getDescription().hasMimeType("image/*"),cfg);
+    }
+    static JSONObject capture(Context c,CharSequence text,Uri uri,boolean imageHint,Config cfg)throws Exception {
         JSONObject job=Wire.obj("host",cfg.host,"port",cfg.port);
         if(uri!=null) {
             if(!"content".equals(uri.getScheme()))throw new IOException("รองรับไฟล์จาก content URI ที่แอปให้สิทธิ์อ่านเท่านั้น");
             String mime=c.getContentResolver().getType(uri);
-            if((mime!=null&&mime.startsWith("image/"))||clip.getDescription().hasMimeType("image/*")) {
-                // Copy while the focused Activity still owns clipboard URI access; never keep a transient URI as the resumable source.
+            if((mime!=null&&mime.startsWith("image/"))||imageHint) {
+                // Copy while the originating Activity still holds its temporary read grant (clipboard or share intent); never keep a transient URI as the resumable source.
                 byte[] encoded;
                 try(InputStream input=c.getContentResolver().openInputStream(uri);ByteArrayOutputStream bytes=new ByteArrayOutputStream()) {
                     if(input==null)throw new IOException("เปิดรูปไม่ได้");byte[] b=new byte[65536];int n;
@@ -66,7 +69,7 @@ final class Jobs {
             byte[] id=new byte[32];new SecureRandom().nextBytes(id);
             job.put("kind","file").put("transferId",Wire.hex(id)).put("name",name).put("size",total).put("hash",Wire.hex(digest.digest()));save(c,job);return job;
         }
-        CharSequence text=item.getText();if(text==null||text.length()==0)throw new Exception("Clipboard นี้ไม่ใช่ข้อความหรือรูปที่อ่านได้");
+        if(text==null||text.length()==0)throw new Exception("ไม่พบข้อความหรือไฟล์ที่อ่านได้ (clipboard ว่างหรือไม่ใช่ข้อความ/รูป)");
         if(Wire.utf(text.toString()).length>512*1024)throw new Exception("ข้อความใหญ่เกิน 512 KB");
         job.put("kind","text").put("text",text.toString());save(c,job);return job;
     }
